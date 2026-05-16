@@ -22,7 +22,7 @@ export default function Home({
           value={customerName}
           onChange={(event) => setCustomerName(event.target.value)}
           className="form-input"
-          placeholder="Customer name"
+          placeholder="Customer name (optional)"
         />
       </Field>
 

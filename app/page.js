@@ -137,7 +137,6 @@ function UploadContent() {
   }
 
   const validateOrder = () => {
-    if (!customerName.trim()) return 'Please enter your name.'
     if (!readyDocs.length) return 'Please upload at least one PDF.'
     if (docs.some((doc) => doc.status === 'counting')) return 'Please wait until page counting is finished.'
 
@@ -232,7 +231,7 @@ function UploadContent() {
       const { data: savedJobs, error: dbError } = await supabase
         .rpc('create_print_order', {
           p_shop_id: shopId,
-          p_customer_name: customerName.trim(),
+          p_customer_name: customerName.trim() || 'Walk-in customer',
           p_documents: orderDocuments,
         })
 
@@ -279,18 +278,6 @@ function UploadContent() {
 
       <main className="mx-auto max-w-5xl px-4 py-5 sm:py-8">
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-200 bg-slate-900 px-5 py-4 text-white">
-            <div className="flex items-center gap-3">
-              <span className="flex h-10 w-10 items-center justify-center rounded-md bg-green-500 text-sm font-black text-white">
-                AS
-              </span>
-              <div>
-                <h2 className="text-xl font-black tracking-tight">Akshaya SmartPrint</h2>
-                <p className="text-sm text-slate-300">Preview selected pages and submit all PDFs as one order.</p>
-              </div>
-            </div>
-          </div>
-
           {errorMsg && (
             <div className="border-b border-red-200 bg-red-50 px-5 py-3 text-sm font-medium text-red-700">
               {errorMsg}

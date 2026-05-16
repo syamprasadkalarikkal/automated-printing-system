@@ -4,12 +4,14 @@ import { useEffect, useState } from 'react'
 import { createSelectedPdfBlob, docTotals, paperDimensions, readableError } from '@/utils/printUtils'
 
 export default function Preview({ docs, customerName, totalAmount, totalPages, isUploading, onBack, onSubmit }) {
+  const displayName = customerName.trim() || 'Print order'
+
   return (
     <div className="space-y-4 p-4 sm:p-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-sm font-semibold text-slate-500">Preview before submit</p>
-          <h3 className="text-2xl font-bold">{customerName}</h3>
+          <h3 className="text-2xl font-bold">{displayName}</h3>
         </div>
         {docs.length > 1 && (
           <button

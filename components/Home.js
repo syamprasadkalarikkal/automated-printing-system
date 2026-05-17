@@ -1,6 +1,6 @@
 'use client'
 
-import { MAX_DOCUMENTS, docTotals, fmtSize, paperDimensions } from '@/utils/printUtils'
+import { ACCEPTED_PRINT_FILES, MAX_DOCUMENTS, docTotals, fmtSize, paperDimensions } from '@/utils/printUtils'
 import { Field, OrderTotal, PaperPreview, Radio, SummaryStat } from './shared'
 
 export default function Home({
@@ -46,7 +46,7 @@ export default function Home({
           <div>
             <p className="text-sm font-bold text-green-950">Multiple documents ready</p>
             <p className="text-sm text-green-800">
-              {readyDocs.length} PDFs will be submitted together under one customer token.
+              {readyDocs.length} files will be submitted together under one customer token.
             </p>
           </div>
         </div>
@@ -59,7 +59,7 @@ export default function Home({
           disabled={docs.length >= MAX_DOCUMENTS}
           className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm disabled:cursor-not-allowed disabled:text-slate-300"
         >
-          + Add another PDF
+          + Add another file
         </button>
         <OrderTotal pages={orderTotals.pages} amount={orderTotals.amount} />
       </div>
@@ -71,13 +71,14 @@ function DocumentCard({ doc, index, canRemove, onPick, onClear, onRemove, onSett
   const totals = docTotals(doc)
   const dimensions = paperDimensions(doc.settings.paperSize, doc.settings.orientation)
   const isReady = doc.file && doc.status === 'ready'
+  const isImageFile = doc.fileKind === 'image'
 
   return (
     <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-bold">Document {index + 1}</p>
-          <p className="text-xs text-slate-500">Each PDF can have separate print settings.</p>
+          <p className="text-xs text-slate-500">Each file can have separate print settings.</p>
         </div>
         <div className="flex gap-2">
           {doc.file && (
@@ -104,7 +105,7 @@ function DocumentCard({ doc, index, canRemove, onPick, onClear, onRemove, onSett
       <label className="mt-3 flex min-h-24 cursor-pointer flex-col justify-center rounded-md border-2 border-dashed border-slate-300 bg-white px-4 py-4 text-sm hover:border-green-500 hover:bg-green-50">
         <input
           type="file"
-          accept=".pdf,application/pdf"
+          accept={ACCEPTED_PRINT_FILES}
           className="hidden"
           onChange={(event) => onPick(event.target.files?.[0])}
         />
@@ -112,13 +113,13 @@ function DocumentCard({ doc, index, canRemove, onPick, onClear, onRemove, onSett
           <>
             <span className="truncate font-semibold text-slate-900">{doc.file.name}</span>
             <span className="mt-1 text-xs text-slate-500">
-              {fmtSize(doc.file.size)} · {doc.status === 'counting' ? 'Counting pages...' : `${doc.pageCount} pages`}
+              {fmtSize(doc.file.size)} · {doc.status === 'counting' ? 'Counting pages...' : `${doc.pageCount} ${isImageFile ? 'image page' : 'pages'}`}
             </span>
           </>
         ) : (
           <>
-            <span className="font-semibold text-slate-900">+ Select PDF</span>
-            <span className="mt-1 text-xs text-slate-500">PDF only, maximum 25 MB</span>
+            <span className="font-semibold text-slate-900">+ Select PDF or image</span>
+            <span className="mt-1 text-xs text-slate-500">PDF, JPG, PNG, or WEBP. Maximum 25 MB</span>
           </>
         )}
       </label>
@@ -196,38 +197,45 @@ function DocumentCard({ doc, index, canRemove, onPick, onClear, onRemove, onSett
         <PaperPreview dimensions={dimensions} pageNumber={doc.pageCount || index + 1} />
       </div>
 
-      <div className="mt-4 rounded-md border border-slate-200 bg-white p-3">
-        <p className="mb-2 text-sm font-bold">Pages to print</p>
-        <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1.4fr]">
-          <Radio
-            label="All Pages"
-            checked={doc.settings.pageRange === 'All Pages'}
-            onChange={() => onSettingChange('pageRange', 'All Pages')}
-          />
-          <Radio
-            label="Current Page"
-            checked={doc.settings.pageRange === 'Current Page'}
-            onChange={() => onSettingChange('pageRange', 'Current Page')}
-          />
-          <label className="flex items-center gap-2">
-            <input
-              type="radio"
-              checked={doc.settings.pageRange === 'Custom'}
-              onChange={() => onSettingChange('pageRange', 'Custom')}
-              className="accent-green-600"
-            />
-            <span className="text-sm">Pages</span>
-            <input
-              value={doc.settings.customPages}
-              onChange={(event) => onSettingChange('customPages', event.target.value)}
-              disabled={doc.settings.pageRange !== 'Custom'}
-              className="form-input min-w-0 disabled:bg-slate-100"
-              placeholder="1-3, 6"
-            />
-          </label>
+      {isImageFile ? (
+        <div className="mt-4 rounded-md border border-slate-200 bg-white p-3">
+          <p className="text-sm font-bold">Pages to print</p>
+          <p className="mt-1 text-sm text-slate-500">This image will be fitted to one printed page.</p>
         </div>
-        {totals.error && <p className="mt-2 text-sm font-medium text-red-600">{totals.error}</p>}
-      </div>
+      ) : (
+        <div className="mt-4 rounded-md border border-slate-200 bg-white p-3">
+          <p className="mb-2 text-sm font-bold">Pages to print</p>
+          <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1.4fr]">
+            <Radio
+              label="All Pages"
+              checked={doc.settings.pageRange === 'All Pages'}
+              onChange={() => onSettingChange('pageRange', 'All Pages')}
+            />
+            <Radio
+              label="Current Page"
+              checked={doc.settings.pageRange === 'Current Page'}
+              onChange={() => onSettingChange('pageRange', 'Current Page')}
+            />
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                checked={doc.settings.pageRange === 'Custom'}
+                onChange={() => onSettingChange('pageRange', 'Custom')}
+                className="accent-green-600"
+              />
+              <span className="text-sm">Pages</span>
+              <input
+                value={doc.settings.customPages}
+                onChange={(event) => onSettingChange('customPages', event.target.value)}
+                disabled={doc.settings.pageRange !== 'Custom'}
+                className="form-input min-w-0 disabled:bg-slate-100"
+                placeholder="1-3, 6"
+              />
+            </label>
+          </div>
+          {totals.error && <p className="mt-2 text-sm font-medium text-red-600">{totals.error}</p>}
+        </div>
+      )}
 
       <Field label="Notes">
         <input

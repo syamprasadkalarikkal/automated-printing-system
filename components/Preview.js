@@ -33,7 +33,7 @@ export default function Preview({ docs, customerName, totalAmount, totalPages, i
           return (
             <div key={doc.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
               <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
-                <PdfDocumentPreview doc={doc} title={`Document ${index + 1}`} />
+                <PrintDocumentPreview doc={doc} title={`Document ${index + 1}`} />
                 <div className="min-w-0">
                   <p className="text-sm font-bold">Document {index + 1}</p>
                   <p className="truncate text-sm text-slate-600">{doc.file.name}</p>
@@ -86,7 +86,7 @@ export default function Preview({ docs, customerName, totalAmount, totalPages, i
   )
 }
 
-function PdfDocumentPreview({ doc, title }) {
+function PrintDocumentPreview({ doc, title }) {
   const [preview, setPreview] = useState({ url: '', error: '' })
 
   useEffect(() => {
@@ -103,7 +103,7 @@ function PdfDocumentPreview({ doc, title }) {
         if (cancelled) return
         setPreview({
           url: '',
-          error: readableError(error, 'Could not create selected page preview.'),
+          error: readableError(error, 'Could not create the print preview.'),
         })
       }
     }
@@ -127,7 +127,7 @@ function PdfDocumentPreview({ doc, title }) {
   if (!preview.url) {
     return (
       <div className="flex min-h-80 items-center justify-center rounded-md border border-slate-300 bg-white text-sm text-slate-500">
-        Preparing selected pages...
+        Preparing print preview...
       </div>
     )
   }

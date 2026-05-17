@@ -12,8 +12,9 @@ import {
   MAX_FILE_SIZE,
   createSelectedPdfBlob,
   docTotals,
+  fileKind,
   formatCustomerToken,
-  isPdf,
+  isPrintableFile,
   newDoc,
   readableError,
 } from '@/utils/printUtils'
@@ -63,13 +64,16 @@ function UploadContent() {
   const pickFile = async (id, picked) => {
     if (!picked) return
 
-    if (!isPdf(picked)) {
+    const pickedKind = fileKind(picked)
+
+    if (!isPrintableFile(picked)) {
       updateDoc(id, (doc) => ({
         ...doc,
         file: null,
+        fileKind: '',
         pageCount: 0,
         status: 'error',
-        error: 'Upload a PDF file only.',
+        error: 'Upload a PDF or image file only.',
       }))
       return
     }
@@ -78,6 +82,7 @@ function UploadContent() {
       updateDoc(id, (doc) => ({
         ...doc,
         file: null,
+        fileKind: '',
         pageCount: 0,
         status: 'error',
         error: 'File too large. Maximum allowed size is 25 MB.',
@@ -88,10 +93,27 @@ function UploadContent() {
     updateDoc(id, (doc) => ({
       ...doc,
       file: picked,
+      fileKind: pickedKind,
       pageCount: 0,
-      status: 'counting',
+      status: pickedKind === 'pdf' ? 'counting' : 'ready',
       error: '',
+      settings: pickedKind === 'image'
+        ? { ...doc.settings, pageRange: 'All Pages', customPages: '' }
+        : doc.settings,
     }))
+
+    if (pickedKind === 'image') {
+      updateDoc(id, (doc) => ({
+        ...doc,
+        file: picked,
+        fileKind: pickedKind,
+        pageCount: 1,
+        status: 'ready',
+        error: '',
+        settings: { ...doc.settings, pageRange: 'All Pages', customPages: '' },
+      }))
+      return
+    }
 
     try {
       const bytes = await picked.arrayBuffer()
@@ -99,6 +121,7 @@ function UploadContent() {
       updateDoc(id, (doc) => ({
         ...doc,
         file: picked,
+        fileKind: pickedKind,
         pageCount: pdf.getPageCount(),
         status: 'ready',
         error: '',
@@ -107,6 +130,7 @@ function UploadContent() {
       updateDoc(id, (doc) => ({
         ...doc,
         file: null,
+        fileKind: '',
         pageCount: 0,
         status: 'error',
         error: 'Could not read this PDF. Please try another file.',
@@ -137,7 +161,7 @@ function UploadContent() {
   }
 
   const validateOrder = () => {
-    if (!readyDocs.length) return 'Please upload at least one PDF.'
+    if (!readyDocs.length) return 'Please upload at least one PDF or image.'
     if (docs.some((doc) => doc.status === 'counting')) return 'Please wait until page counting is finished.'
 
     const invalidDoc = readyDocs.find((doc) => docTotals(doc).error)
@@ -184,8 +208,7 @@ function UploadContent() {
     try {
       for (const [index, doc] of readyDocs.entries()) {
         const totals = docTotals(doc)
-        const ext = doc.file.name.split('.').pop() || 'pdf'
-        const fileName = `${shopId}/${crypto.randomUUID()}.${ext}`
+        const fileName = `${shopId}/${crypto.randomUUID()}.pdf`
         const printFile = await createSelectedPdfBlob(doc)
 
         const { error: storageError } = await supabase.storage

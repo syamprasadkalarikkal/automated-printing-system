@@ -21,7 +21,7 @@ export default function SuccessPanel({ jobs, totalAmount, onReset }) {
         </div>
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-slate-950">Print job received</h2>
-          <p className="mt-1 text-sm text-slate-500">Your PDFs are saved and ready for the counter.</p>
+          <p className="mt-1 text-sm text-slate-500">Your files are saved and ready for the counter.</p>
         </div>
       </div>
 

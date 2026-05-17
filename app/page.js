@@ -210,6 +210,7 @@ function UploadContent() {
         const totals = docTotals(doc)
         const fileName = `${shopId}/${crypto.randomUUID()}.pdf`
         const printFile = await createSelectedPdfBlob(doc)
+        const customerLabel = customerName.trim() || 'Walk-in customer'
 
         const { error: storageError } = await supabase.storage
           .from('print-queue')
@@ -226,6 +227,8 @@ function UploadContent() {
         uploadedPaths.push(fileName)
 
         orderDocuments.push({
+          shop_id: shopId,
+          customer_name: customerLabel,
           file_path: fileName,
           original_file_name: doc.file.name,
           file_size: printFile.size,
@@ -252,14 +255,12 @@ function UploadContent() {
       }
 
       const { data: savedJobs, error: dbError } = await supabase
-        .rpc('create_print_order', {
-          p_shop_id: shopId,
-          p_customer_name: customerName.trim() || 'Walk-in customer',
-          p_documents: orderDocuments,
-        })
+        .from('print_jobs')
+        .insert(orderDocuments)
+        .select('original_file_name,total_print_pages,total_amount,queue_number,customer_token')
 
       if (dbError) {
-        throw new Error(`Database save failed: ${readableError(dbError, 'Supabase could not save the print order.')}`)
+        throw new Error(`Database save failed: ${readableError(dbError, 'Supabase could not save the print job.')}`)
       }
 
       for (const [index, job] of (savedJobs || []).entries()) {

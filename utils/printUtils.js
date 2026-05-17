@@ -71,6 +71,7 @@ export const readableError = (error, fallback) => {
   if (!error) return fallback
   if (typeof error === 'string') return error
 
+  const setupMessage = 'Run supabase/print_queue_setup.sql in Supabase'
   const message =
     error.message ||
     error.error_description ||
@@ -78,8 +79,12 @@ export const readableError = (error, fallback) => {
     error.hint ||
     fallback
 
+  if (message?.includes(setupMessage)) {
+    return message
+  }
+
   if (message?.includes('schema cache')) {
-    return `${message}. Run supabase/print_queue_setup.sql in Supabase, then retry.`
+    return `${message}. ${setupMessage}, then retry.`
   }
 
   return message || fallback

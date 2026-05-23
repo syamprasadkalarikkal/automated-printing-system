@@ -18,7 +18,7 @@ export const PAPER_SIZES = {
 
 export const PRINT_LAYOUTS = {
   normal: 'Normal',
-  aadhaarRow: 'Aadhaar front/back row',
+  aadhaarRow: 'front/back row',
 }
 
 export const newDoc = () => ({

@@ -1,7 +1,13 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { createSelectedPdfBlob, docTotals, paperDimensions, readableError } from '@/utils/printUtils'
+import {
+  PRINT_LAYOUTS,
+  createSelectedPdfBlob,
+  docTotals,
+  paperDimensions,
+  readableError,
+} from '@/utils/printUtils'
 
 export default function Preview({ docs, customerName, totalAmount, totalPages, isUploading, onBack, onSubmit }) {
   const displayName = customerName.trim() || 'Print order'
@@ -43,6 +49,11 @@ export default function Preview({ docs, customerName, totalAmount, totalPages, i
                   <p className="mt-1 text-xs text-slate-500">
                     Pages {totals.label} · Copies {totals.copies} · Total print pages {totals.printPages}
                   </p>
+                  {doc.settings.printLayout === PRINT_LAYOUTS.aadhaarRow && (
+                    <p className="mt-1 text-xs font-semibold text-green-700">
+                      Aadhaar front/back row layout
+                    </p>
+                  )}
                   <div className="mt-4 rounded-md border border-slate-200 bg-white p-3">
                     <p className="text-xs font-semibold text-slate-500">Amount</p>
                     <p className="text-2xl font-black text-green-700">Rs.{totals.amount}</p>

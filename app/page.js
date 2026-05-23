@@ -10,6 +10,7 @@ import SuccessPanel from '@/components/SuccessPanel'
 import { supabase } from '@/lib/supabase'
 import {
   MAX_FILE_SIZE,
+  PRINT_LAYOUTS,
   createSelectedPdfBlob,
   docTotals,
   fileKind,
@@ -57,6 +58,13 @@ function UploadContent() {
       settings: {
         ...doc.settings,
         [name]: value,
+        ...(name === 'printLayout' && value === PRINT_LAYOUTS.aadhaarRow
+          ? {
+              orientation: 'Landscape',
+              twoSided: 'Single sided',
+              pagesPerSide: '1',
+            }
+          : {}),
       },
     }))
   }
@@ -98,7 +106,12 @@ function UploadContent() {
       status: pickedKind === 'pdf' ? 'counting' : 'ready',
       error: '',
       settings: pickedKind === 'image'
-        ? { ...doc.settings, pageRange: 'All Pages', customPages: '' }
+        ? {
+            ...doc.settings,
+            printLayout: PRINT_LAYOUTS.normal,
+            pageRange: 'All Pages',
+            customPages: '',
+          }
         : doc.settings,
     }))
 
@@ -110,7 +123,12 @@ function UploadContent() {
         pageCount: 1,
         status: 'ready',
         error: '',
-        settings: { ...doc.settings, pageRange: 'All Pages', customPages: '' },
+        settings: {
+          ...doc.settings,
+          printLayout: PRINT_LAYOUTS.normal,
+          pageRange: 'All Pages',
+          customPages: '',
+        },
       }))
       return
     }

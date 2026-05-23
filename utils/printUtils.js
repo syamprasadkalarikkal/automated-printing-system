@@ -16,6 +16,11 @@ export const PAPER_SIZES = {
   Legal: { width: 8.5, height: 14 },
 }
 
+export const PRINT_LAYOUTS = {
+  normal: 'Normal',
+  aadhaarRow: 'Aadhaar front/back row',
+}
+
 export const newDoc = () => ({
   id: crypto.randomUUID(),
   file: null,
@@ -30,6 +35,7 @@ export const newDoc = () => ({
     colorMode: 'Black & White',
     twoSided: 'Single sided',
     pagesPerSide: '1',
+    printLayout: PRINT_LAYOUTS.normal,
     pageRange: 'All Pages',
     customPages: '',
     notes: '',
@@ -106,9 +112,16 @@ export const parseSelectedPages = (doc) => {
   const allPages = Array.from({ length: pageCount }, (_, index) => index + 1)
 
   if (pageRange === 'All Pages') {
-    return { count: pageCount, label: pageCount === 1 ? '1' : `1-${pageCount}`, pages: allPages, error: '' }
+    return withPrintLayoutSelection(doc, {
+      count: pageCount,
+      label: pageCount === 1 ? '1' : `1-${pageCount}`,
+      pages: allPages,
+      error: '',
+    })
   }
-  if (pageRange === 'Current Page') return { count: 1, label: '1', pages: [1], error: '' }
+  if (pageRange === 'Current Page') {
+    return withPrintLayoutSelection(doc, { count: 1, label: '1', pages: [1], error: '' })
+  }
 
   const raw = customPages.trim()
   if (!raw) return { count: 0, label: '', pages: [], error: 'Enter pages like 1-3, 6.' }
@@ -134,7 +147,38 @@ export const parseSelectedPages = (doc) => {
     for (let page = start; page <= end; page += 1) pages.add(page)
   }
 
-  return { count: pages.size, label: raw, pages: [...pages].sort((a, b) => a - b), error: '' }
+  return withPrintLayoutSelection(doc, {
+    count: pages.size,
+    label: raw,
+    pages: [...pages].sort((a, b) => a - b),
+    error: '',
+  })
+}
+
+const withPrintLayoutSelection = (doc, selected) => {
+  if (selected.error || doc.settings.printLayout !== PRINT_LAYOUTS.aadhaarRow) return selected
+
+  if (doc.fileKind === 'image') {
+    return {
+      ...selected,
+      count: 0,
+      error: 'Aadhaar front/back row is available for PDF files only.',
+    }
+  }
+
+  if (selected.pages.length !== 2) {
+    return {
+      ...selected,
+      count: 0,
+      error: 'Select exactly 2 PDF pages for Aadhaar front/back row.',
+    }
+  }
+
+  return {
+    ...selected,
+    count: 1,
+    label: `${selected.label} as front/back row`,
+  }
 }
 
 export const docTotals = (doc) => {
@@ -158,6 +202,10 @@ export const createSelectedPdfBlob = async (doc) => {
 
   if (doc.fileKind === 'image' || isImage(doc.file)) return createImagePdfBlob(doc)
 
+  if (doc.settings.printLayout === PRINT_LAYOUTS.aadhaarRow) {
+    return createAadhaarRowPdfBlob(doc, selected.pages)
+  }
+
   const isFullDocument =
     selected.pages.length === doc.pageCount &&
     selected.pages.every((page, index) => page === index + 1)
@@ -179,6 +227,8 @@ export const createSelectedPdfBlob = async (doc) => {
 
 const POINTS_PER_INCH = 72
 const PAGE_MARGIN = 24
+const ROW_LAYOUT_MARGIN = 36
+const ROW_LAYOUT_GAP = 18
 
 const embedImageFile = async (pdf, file) => {
   const bytes = await file.arrayBuffer()
@@ -250,5 +300,40 @@ const createImagePdfBlob = async (doc) => {
   })
 
   const bytes = await pdf.save()
+  return new Blob([bytes], { type: 'application/pdf' })
+}
+
+const createAadhaarRowPdfBlob = async (doc, selectedPages) => {
+  const sourcePdf = await PDFDocument.load(await doc.file.arrayBuffer(), { ignoreEncryption: true })
+  const outputPdf = await PDFDocument.create()
+  const dimensions = paperDimensions(doc.settings.paperSize, doc.settings.orientation)
+  const pageWidth = dimensions.width * POINTS_PER_INCH
+  const pageHeight = dimensions.height * POINTS_PER_INCH
+  const page = outputPdf.addPage([pageWidth, pageHeight])
+
+  const drawableWidth = pageWidth - ROW_LAYOUT_MARGIN * 2
+  const drawableHeight = pageHeight - ROW_LAYOUT_MARGIN * 2
+  const cellWidth = (drawableWidth - ROW_LAYOUT_GAP) / 2
+  const cellHeight = drawableHeight
+
+  const embeddedPages = await Promise.all(
+    selectedPages.map((pageNumber) => outputPdf.embedPage(sourcePdf.getPage(pageNumber - 1)))
+  )
+
+  embeddedPages.forEach((embeddedPage, index) => {
+    const scale = Math.min(cellWidth / embeddedPage.width, cellHeight / embeddedPage.height)
+    const width = embeddedPage.width * scale
+    const height = embeddedPage.height * scale
+    const cellX = ROW_LAYOUT_MARGIN + index * (cellWidth + ROW_LAYOUT_GAP)
+
+    page.drawPage(embeddedPage, {
+      x: cellX + (cellWidth - width) / 2,
+      y: ROW_LAYOUT_MARGIN + (cellHeight - height) / 2,
+      width,
+      height,
+    })
+  })
+
+  const bytes = await outputPdf.save()
   return new Blob([bytes], { type: 'application/pdf' })
 }

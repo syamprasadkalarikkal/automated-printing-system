@@ -1,6 +1,13 @@
 'use client'
 
-import { ACCEPTED_PRINT_FILES, MAX_DOCUMENTS, docTotals, fmtSize, paperDimensions } from '@/utils/printUtils'
+import {
+  ACCEPTED_PRINT_FILES,
+  MAX_DOCUMENTS,
+  PRINT_LAYOUTS,
+  docTotals,
+  fmtSize,
+  paperDimensions,
+} from '@/utils/printUtils'
 import { Field, OrderTotal, PaperPreview, Radio, SummaryStat } from './shared'
 
 export default function Home({
@@ -72,6 +79,7 @@ function DocumentCard({ doc, index, canRemove, onPick, onClear, onRemove, onSett
   const dimensions = paperDimensions(doc.settings.paperSize, doc.settings.orientation)
   const isReady = doc.file && doc.status === 'ready'
   const isImageFile = doc.fileKind === 'image'
+  const isAadhaarRow = doc.settings.printLayout === PRINT_LAYOUTS.aadhaarRow
 
   return (
     <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -174,7 +182,8 @@ function DocumentCard({ doc, index, canRemove, onPick, onClear, onRemove, onSett
             <select
               value={doc.settings.twoSided}
               onChange={(event) => onSettingChange('twoSided', event.target.value)}
-              className="form-input"
+              disabled={isAadhaarRow}
+              className="form-input disabled:bg-slate-100"
             >
               <option>Single sided</option>
               <option>Two sided long edge</option>
@@ -185,13 +194,26 @@ function DocumentCard({ doc, index, canRemove, onPick, onClear, onRemove, onSett
             <select
               value={doc.settings.pagesPerSide}
               onChange={(event) => onSettingChange('pagesPerSide', event.target.value)}
-              className="form-input"
+              disabled={isAadhaarRow}
+              className="form-input disabled:bg-slate-100"
             >
               <option>1</option>
               <option>2</option>
               <option>4</option>
             </select>
           </Field>
+          {!isImageFile && (
+            <Field label="Layout">
+              <select
+                value={doc.settings.printLayout}
+                onChange={(event) => onSettingChange('printLayout', event.target.value)}
+                className="form-input"
+              >
+                <option>{PRINT_LAYOUTS.normal}</option>
+                <option>{PRINT_LAYOUTS.aadhaarRow}</option>
+              </select>
+            </Field>
+          )}
         </div>
 
         <PaperPreview dimensions={dimensions} pageNumber={doc.pageCount || index + 1} />
@@ -205,6 +227,11 @@ function DocumentCard({ doc, index, canRemove, onPick, onClear, onRemove, onSett
       ) : (
         <div className="mt-4 rounded-md border border-slate-200 bg-white p-3">
           <p className="mb-2 text-sm font-bold">Pages to print</p>
+          {isAadhaarRow && (
+            <p className="mb-2 text-sm text-slate-500">
+              Select the 2 pages that contain the front and back. They will be placed side by side on one landscape page.
+            </p>
+          )}
           <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1.4fr]">
             <Radio
               label="All Pages"

@@ -1,7 +1,8 @@
 'use client'
 
 import Image from 'next/image'
-import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { readableError } from '@/utils/printUtils'
 import { supabase } from '@/lib/supabase'
 
@@ -24,6 +25,8 @@ const TIME = new Intl.DateTimeFormat('en-IN', {
   timeZone: IST_TIME_ZONE,
 })
 
+const COMPLETED_QUEUE_RETENTION_MS = 5 * 60 * 1000
+
 const dateKey = (value) =>
   new Intl.DateTimeFormat('en-CA', {
     day: '2-digit',
@@ -37,11 +40,56 @@ const startOfToday = () => {
   return new Date(`${key}T00:00:00+05:30`)
 }
 
-const startOfTomorrow = () => new Date(startOfToday().getTime() + 24 * 60 * 60 * 1000)
-
 const numberValue = (value) => Number(value) || 0
 
-const sum = (rows, key) => rows.reduce((total, row) => total + numberValue(row[key]), 0)
+const statusLabel = (job) => {
+  if (job.status === 'completed') return 'Completed'
+  if (job.status === 'printing') return 'Printing'
+  return 'Pending'
+}
+
+const removalTime = (job) => {
+  if (job.status !== 'completed' || !job.completed_at) return ''
+  return TIME.format(new Date(new Date(job.completed_at).getTime() + COMPLETED_QUEUE_RETENTION_MS))
+}
+
+const csvCell = (value) => {
+  const text = String(value ?? '')
+  if (!/[",\n\r]/.test(text)) return text
+  return `"${text.replaceAll('"', '""')}"`
+}
+
+const csvDateLabel = (reportDate) => {
+  if (!reportDate) return ''
+  return DATE.format(new Date(`${reportDate}T00:00:00+05:30`))
+}
+
+const csvText = (headers, rows) =>
+  [headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\n')
+
+const downloadCsvFile = (filename, csv) => {
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+
+  link.href = url
+  link.download = filename
+  document.body.append(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+const dayCsvRow = (day) => [
+  day.report_date,
+  csvDateLabel(day.report_date),
+  numberValue(day.black_and_white_prints),
+  numberValue(day.color_prints),
+  numberValue(day.total_prints),
+  numberValue(day.total_earnings),
+]
+
+const dayCsvHeaders = ['Date', 'Day', 'Black & White Prints', 'Color Prints', 'Total Prints', 'Total Earnings']
 
 export default function AdminDashboard() {
   const [session, setSession] = useState(null)
@@ -52,8 +100,10 @@ export default function AdminDashboard() {
   const [authError, setAuthError] = useState('')
   const [isSigningIn, setIsSigningIn] = useState(false)
   const [jobs, setJobs] = useState([])
+  const [completedJobs, setCompletedJobs] = useState([])
   const [isLoading, setIsLoading] = useState(false)
   const [dataError, setDataError] = useState('')
+  const [actionJobId, setActionJobId] = useState('')
 
   useEffect(() => {
     let isMounted = true
@@ -78,78 +128,79 @@ export default function AdminDashboard() {
     }
   }, [])
 
-  useEffect(() => {
+  const cleanupCompletedQueueRows = useCallback(async () => {
+    const { error } = await supabase.rpc('cleanup_completed_print_jobs')
+    if (error) throw error
+  }, [])
+
+  const loadDashboardData = useCallback(async (showLoading = true) => {
     if (!session) return
 
-    async function loadJobs() {
-      setIsLoading(true)
-      setDataError('')
+    if (showLoading) setIsLoading(true)
+    setDataError('')
 
-      const since = new Date(startOfToday().getTime() - 6 * 24 * 60 * 60 * 1000).toISOString()
-      const { data, error } = await supabase
-        .from('print_jobs')
-        .select(
-          'id,created_at,shop_id,customer_name,original_file_name,total_print_pages,total_amount,copies,color_mode,paper_size,queue_number,customer_token'
-        )
-        .gte('created_at', since)
-        .order('created_at', { ascending: false })
-        .limit(500)
+    try {
+      await cleanupCompletedQueueRows()
 
-      if (error) {
-        setDataError(readableError(error, 'Could not load dashboard data.'))
-        setJobs([])
-      } else {
-        setJobs(data || [])
-      }
+      const [queueResult, archiveResult] = await Promise.all([
+        supabase
+          .from('print_jobs')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(1000),
+        supabase
+          .from('completed_print_jobs')
+          .select('*')
+          .order('report_date', { ascending: false })
+          .limit(1000),
+      ])
 
-      setIsLoading(false)
+      if (queueResult.error) throw queueResult.error
+      if (archiveResult.error) throw archiveResult.error
+
+      setJobs(queueResult.data || [])
+      setCompletedJobs(archiveResult.data || [])
+    } catch (error) {
+      setDataError(readableError(error, 'Could not load dashboard data. Run the updated Supabase dashboard SQL, then refresh.'))
+      setJobs([])
+      setCompletedJobs([])
+    } finally {
+      if (showLoading) setIsLoading(false)
     }
+  }, [cleanupCompletedQueueRows, session])
 
-    loadJobs()
-  }, [session])
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      loadDashboardData()
+    }, 0)
+
+    return () => window.clearTimeout(timeout)
+  }, [loadDashboardData])
+
+  useEffect(() => {
+    if (!session) return undefined
+
+    const interval = window.setInterval(() => {
+      loadDashboardData(false)
+    }, 60 * 1000)
+
+    return () => window.clearInterval(interval)
+  }, [loadDashboardData, session])
 
   const metrics = useMemo(() => {
     const todayStart = startOfToday()
-    const tomorrowStart = startOfTomorrow()
-    const todayRows = jobs.filter((job) => {
-      const created = new Date(job.created_at)
-      return created >= todayStart && created < tomorrowStart
-    })
-
-    const daily = Array.from({ length: 7 }, (_, index) => {
-      const day = new Date(todayStart.getTime() - (6 - index) * 24 * 60 * 60 * 1000)
-      const nextDay = new Date(day.getTime() + 24 * 60 * 60 * 1000)
-      const rows = jobs.filter((job) => {
-        const created = new Date(job.created_at)
-        return created >= day && created < nextDay
-      })
-
-      return {
-        label: DATE.format(day),
-        jobs: rows.length,
-        pages: sum(rows, 'total_print_pages'),
-        revenue: sum(rows, 'total_amount'),
-      }
-    })
-
-    const maxDailyRevenue = Math.max(...daily.map((day) => day.revenue), 1)
-    const colorJobs = todayRows.filter((job) => job.color_mode === 'Color').length
-    const bwJobs = todayRows.length - colorJobs
+    const todayKey = dateKey(todayStart)
+    const todaySummary = completedJobs.find((row) => row.report_date === todayKey)
 
     return {
-      todayRows,
-      daily,
-      maxDailyRevenue,
-      todayRevenue: sum(todayRows, 'total_amount'),
-      todayPages: sum(todayRows, 'total_print_pages'),
-      todayJobs: todayRows.length,
-      weekRevenue: sum(jobs, 'total_amount'),
-      weekPages: sum(jobs, 'total_print_pages'),
-      averageJob: todayRows.length ? Math.round(sum(todayRows, 'total_amount') / todayRows.length) : 0,
-      colorJobs,
-      bwJobs,
+      todayRevenue: numberValue(todaySummary?.total_earnings),
+      todayPrints: numberValue(todaySummary?.total_prints),
+      colorPrints: numberValue(todaySummary?.color_prints),
+      bwPrints: numberValue(todaySummary?.black_and_white_prints),
     }
-  }, [jobs])
+  }, [completedJobs])
+
+  const queueJobs = useMemo(() => jobs, [jobs])
 
   const signInWithPassword = async (event) => {
     event.preventDefault()
@@ -168,9 +219,89 @@ export default function AdminDashboard() {
     setIsSigningIn(false)
   }
 
+  const markFileDeleted = async (job, storageDeletedAt) => {
+    const { error } = await supabase
+      .from('print_jobs')
+      .update({ storage_deleted_at: storageDeletedAt })
+      .eq('id', job.id)
+
+    if (error) throw error
+  }
+
+  const deleteStoredFile = async (job) => {
+    if (!job.file_path || job.storage_deleted_at) return ''
+
+    const { error } = await supabase.storage
+      .from('print-queue')
+      .remove([job.file_path])
+
+    if (error) throw error
+
+    const storageDeletedAt = new Date().toISOString()
+    await markFileDeleted(job, storageDeletedAt)
+    return storageDeletedAt
+  }
+
+  const completeJob = async (job) => {
+    if (!job?.id || actionJobId) return
+
+    setActionJobId(job.id)
+    setDataError('')
+
+    try {
+      const completedAt = new Date().toISOString()
+      const { data, error } = await supabase
+        .from('print_jobs')
+        .update({ status: 'completed', completed_at: completedAt })
+        .eq('id', job.id)
+        .select('*')
+        .single()
+
+      if (error) throw error
+
+      const completedJob = data || { ...job, status: 'completed', completed_at: completedAt }
+      await deleteStoredFile(completedJob)
+
+      await loadDashboardData(false)
+
+      window.setTimeout(() => {
+        loadDashboardData(false)
+      }, COMPLETED_QUEUE_RETENTION_MS + 1000)
+    } catch (error) {
+      await loadDashboardData(false)
+      setDataError(readableError(error, 'Could not complete this print job.'))
+    } finally {
+      setActionJobId('')
+    }
+  }
+
+  const retryFileDelete = async (job) => {
+    if (!job?.id || actionJobId) return
+
+    setActionJobId(job.id)
+    setDataError('')
+
+    try {
+      await deleteStoredFile(job)
+      await loadDashboardData(false)
+    } catch (error) {
+      setDataError(readableError(error, 'Could not delete the stored print file.'))
+    } finally {
+      setActionJobId('')
+    }
+  }
+
+  const downloadDayWiseCsv = () => {
+    const rows = completedJobs.map(dayCsvRow)
+    const csv = csvText(dayCsvHeaders, rows)
+
+    downloadCsvFile(`printq-day-wise-earnings-${dateKey(new Date())}.csv`, csv)
+  }
+
   const signOut = async () => {
     await supabase.auth.signOut()
     setJobs([])
+    setCompletedJobs([])
   }
 
   if (!authReady) {
@@ -213,7 +344,7 @@ export default function AdminDashboard() {
             <div className="mt-8 grid gap-3 sm:grid-cols-3">
               <LoginStat label="Access" value="Password" />
               <LoginStat label="Scope" value="Admin only" />
-              <LoginStat label="Report" value="7 days" />
+              <LoginStat label="Report" value="Monthly CSV" />
             </div>
           </div>
 
@@ -287,28 +418,49 @@ export default function AdminDashboard() {
             priority
             className="h-10 w-[156px] shrink-0 object-contain"
           />
-          <button
-            type="button"
-            onClick={signOut}
-            title="Sign out"
-            aria-label="Sign out"
-            className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50"
-          >
-            <svg
-              aria-hidden="true"
-              viewBox="0 0 24 24"
-              className="h-5 w-5"
-              fill="none"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
+          <div className="flex items-center gap-2">
+            <Link
+              href="/admin/monthly-reports"
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-black text-slate-800 shadow-sm transition hover:bg-slate-50"
             >
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-              <path d="M16 17l5-5-5-5" />
-              <path d="M21 12H9" />
-            </svg>
-          </button>
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                className="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+              >
+                <path d="M3 3v18h18" />
+                <path d="M7 14l3-3 3 2 5-6" />
+              </svg>
+              Monthly reports
+            </Link>
+            <button
+              type="button"
+              onClick={signOut}
+              title="Sign out"
+              aria-label="Sign out"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50"
+            >
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                className="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+              >
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <path d="M16 17l5-5-5-5" />
+                <path d="M21 12H9" />
+              </svg>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -318,65 +470,45 @@ export default function AdminDashboard() {
             {dataError}
           </div>
         )}
+        {!dataError && !isLoading && !queueJobs.length && !completedJobs.length && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+            No print jobs are visible yet. Submit one customer print order, and make sure the Supabase dashboard SQL has been run.
+          </div>
+        )}
 
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <MetricCard label="Today's revenue" value={MONEY.format(metrics.todayRevenue)} tone="green" />
-          <MetricCard label="Today's print jobs" value={metrics.todayJobs} />
-          <MetricCard label="Today's pages" value={metrics.todayPages} />
-          <MetricCard label="Average job" value={MONEY.format(metrics.averageJob)} />
+          <MetricCard label="Today's earnings" value={MONEY.format(metrics.todayRevenue)} tone="green" />
+          <MetricCard label="Total prints today" value={metrics.todayPrints} />
+          <MetricCard label="Black & White prints" value={metrics.bwPrints} />
+          <MetricCard label="Color prints" value={metrics.colorPrints} />
         </section>
 
-        <section className="grid gap-5 lg:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.75fr)]">
+        <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
           <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-lg font-black">Last 7 days</h2>
-                <p className="text-sm text-slate-500">
-                  {MONEY.format(metrics.weekRevenue)} from {metrics.weekPages} pages
-                </p>
-              </div>
-              {isLoading && <p className="text-sm font-semibold text-slate-500">Refreshing...</p>}
-            </div>
-            <div className="mt-5 grid h-64 grid-cols-7 items-end gap-3">
-              {metrics.daily.map((day) => (
-                <div key={day.label} className="flex h-full min-w-0 flex-col justify-end gap-2">
-                  <div className="flex flex-1 items-end rounded bg-slate-100 p-1">
-                    <div
-                      className="w-full rounded bg-emerald-500"
-                      style={{ height: `${Math.max((day.revenue / metrics.maxDailyRevenue) * 100, day.revenue ? 8 : 0)}%` }}
-                    />
-                  </div>
-                  <div className="text-center">
-                    <p className="truncate text-xs font-bold text-slate-700">{day.label}</p>
-                    <p className="text-xs text-slate-500">{MONEY.format(day.revenue)}</p>
-                  </div>
-                </div>
-              ))}
+            <h2 className="text-lg font-black">Today mode</h2>
+            <div className="mt-4 space-y-3">
+              <ModeBar label="Black & White" value={metrics.bwPrints} total={metrics.todayPrints} />
+              <ModeBar label="Color" value={metrics.colorPrints} total={metrics.todayPrints} />
             </div>
           </div>
-
-          <div className="space-y-5">
-            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <h2 className="text-lg font-black">Today mode</h2>
-              <div className="mt-4 space-y-3">
-                <ModeBar label="Black & White" value={metrics.bwJobs} total={metrics.todayJobs} />
-                <ModeBar label="Color" value={metrics.colorJobs} total={metrics.todayJobs} />
-              </div>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-950 p-4 text-white shadow-sm">
-              <p className="text-sm font-semibold text-slate-300">Week total</p>
-              <p className="mt-2 text-3xl font-black">{MONEY.format(metrics.weekRevenue)}</p>
-              <p className="mt-1 text-sm text-slate-400">{jobs.length} jobs in the last 7 days</p>
-            </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-950 p-4 text-white shadow-sm">
+            <p className="text-sm font-semibold text-slate-300">Monthly reports</p>
+            <p className="mt-2 text-2xl font-black">CSV files</p>
+            <Link
+              href="/admin/monthly-reports"
+              className="mt-4 inline-flex rounded-md bg-white px-3 py-2 text-xs font-black text-slate-950 shadow-sm hover:bg-slate-100"
+            >
+              Open monthly reports
+            </Link>
           </div>
         </section>
 
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 px-4 py-3">
-            <h2 className="text-lg font-black">Recent print jobs</h2>
+            <h2 className="text-lg font-black">Print queue</h2>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[780px] text-left text-sm">
+            <table className="w-full min-w-[980px] text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                 <tr>
                   <th className="px-4 py-3">Time</th>
@@ -384,28 +516,137 @@ export default function AdminDashboard() {
                   <th className="px-4 py-3">Customer</th>
                   <th className="px-4 py-3">File</th>
                   <th className="px-4 py-3">Mode</th>
+                  <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3 text-right">Pages</th>
                   <th className="px-4 py-3 text-right">Amount</th>
+                  <th className="px-4 py-3 text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {jobs.slice(0, 20).map((job) => (
+                {queueJobs.slice(0, 20).map((job) => (
                   <tr key={job.id || `${job.created_at}-${job.original_file_name}`} className="hover:bg-slate-50">
                     <td className="whitespace-nowrap px-4 py-3 font-medium">{TIME.format(new Date(job.created_at))}</td>
                     <td className="px-4 py-3 font-mono text-xs font-bold">{job.customer_token || job.queue_number || '-'}</td>
                     <td className="px-4 py-3">{job.customer_name || 'Walk-in customer'}</td>
                     <td className="max-w-[240px] truncate px-4 py-3 text-slate-600">{job.original_file_name || '-'}</td>
                     <td className="px-4 py-3">{job.color_mode || '-'}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex min-w-[118px] flex-col gap-1">
+                        <span className={`inline-flex w-fit rounded-full px-2 py-1 text-xs font-black ${
+                          job.status === 'completed'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : job.status === 'printing'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-amber-100 text-amber-800'
+                        }`}>
+                          {statusLabel(job)}
+                        </span>
+                        {job.status === 'completed' && removalTime(job) && (
+                          <span className="text-xs font-semibold text-slate-500">Queue clears {removalTime(job)}</span>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-3 text-right font-mono">{numberValue(job.total_print_pages)}</td>
                     <td className="px-4 py-3 text-right font-mono font-black text-emerald-700">
                       {MONEY.format(numberValue(job.total_amount))}
                     </td>
+                    <td className="px-4 py-3 text-right">
+                      {job.status === 'completed' ? (
+                        job.file_path && !job.storage_deleted_at ? (
+                          <button
+                            type="button"
+                            onClick={() => retryFileDelete(job)}
+                            disabled={actionJobId === job.id}
+                            className="rounded-md border border-red-200 bg-white px-3 py-2 text-xs font-black text-red-700 shadow-sm hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {actionJobId === job.id ? 'Deleting...' : 'Delete file'}
+                          </button>
+                        ) : (
+                          <span className="text-xs font-bold text-slate-400">Done</span>
+                        )
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => completeJob(job)}
+                          disabled={actionJobId === job.id}
+                          className="rounded-md bg-slate-950 px-3 py-2 text-xs font-black text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                        >
+                          {actionJobId === job.id ? 'Saving...' : 'Completed'}
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
-                {!jobs.length && (
+                {!queueJobs.length && (
                   <tr>
-                    <td colSpan="7" className="px-4 py-10 text-center text-sm text-slate-500">
-                      No print jobs found for the last 7 days.
+                    <td colSpan="9" className="px-4 py-10 text-center text-sm text-slate-500">
+                      No print jobs in queue.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+            <div>
+              <h2 className="text-lg font-black">Day-wise earnings</h2>
+              <p className="mt-1 text-sm text-slate-500">Daily totals for every completed print day.</p>
+            </div>
+            <button
+              type="button"
+              onClick={downloadDayWiseCsv}
+              disabled={!completedJobs.length}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-black text-slate-800 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                className="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+              >
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <path d="M7 10l5 5 5-5" />
+                <path d="M12 15V3" />
+              </svg>
+              Download day-wise CSV
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[700px] text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                <tr>
+                  <th className="px-4 py-3">Day</th>
+                  <th className="px-4 py-3 text-right">Black & White</th>
+                  <th className="px-4 py-3 text-right">Color</th>
+                  <th className="px-4 py-3 text-right">Total prints</th>
+                  <th className="px-4 py-3 text-right">Total earnings</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {completedJobs.map((day) => (
+                  <tr key={day.id || day.report_date} className="hover:bg-slate-50">
+                    <td className="whitespace-nowrap px-4 py-3 font-bold text-slate-900">
+                      {DATE.format(new Date(`${day.report_date}T00:00:00+05:30`))}
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono">{numberValue(day.black_and_white_prints)}</td>
+                    <td className="px-4 py-3 text-right font-mono">{numberValue(day.color_prints)}</td>
+                    <td className="px-4 py-3 text-right font-mono">{numberValue(day.total_prints)}</td>
+                    <td className="px-4 py-3 text-right font-mono font-black text-emerald-700">
+                      {MONEY.format(numberValue(day.total_earnings))}
+                    </td>
+                  </tr>
+                ))}
+                {!completedJobs.length && (
+                  <tr>
+                    <td colSpan="5" className="px-4 py-10 text-center text-sm text-slate-500">
+                      No completed day totals yet.
                     </td>
                   </tr>
                 )}

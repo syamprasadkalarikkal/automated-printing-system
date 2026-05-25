@@ -7,6 +7,7 @@ export default function Navbar({
   docs,
   readyDocs,
   isUploading,
+  accessLocked = false,
   onCancel,
   onEdit,
   onPreview,
@@ -34,7 +35,7 @@ export default function Navbar({
             className="h-10 w-[156px] shrink-0 object-contain"
           />
         </div>
-        {screen !== 'success' && (
+        {screen !== 'success' && !accessLocked && (
           <button
             type="button"
             onClick={screen === 'preview' ? onEdit : onCancel}
@@ -43,7 +44,7 @@ export default function Navbar({
             {screen === 'preview' ? 'Edit' : 'Cancel'}
           </button>
         )}
-        {screen !== 'success' && (
+        {screen !== 'success' && !accessLocked && (
           <button
             type="button"
             onClick={screen === 'preview' ? onSubmit : onPreview}

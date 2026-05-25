@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useMemo, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { PDFDocument } from 'pdf-lib'
 import Home from '@/components/Home'
@@ -20,12 +20,22 @@ import {
   readableError,
 } from '@/utils/printUtils'
 
+const formatAccessTime = (seconds) => {
+  const safeSeconds = Math.max(Number(seconds) || 0, 0)
+  const minutes = Math.floor(safeSeconds / 60)
+  const remainder = String(safeSeconds % 60).padStart(2, '0')
+  return `${minutes}:${remainder}`
+}
+
 function UploadContent() {
   const searchParams = useSearchParams()
   const shopId =
     searchParams.get('shop') ||
     process.env.NEXT_PUBLIC_DEFAULT_SHOP_ID ||
     'main-counter'
+  const qrExpires = searchParams.get('qr_expires') || ''
+  const qrNonce = searchParams.get('qr_nonce') || ''
+  const qrSignature = searchParams.get('qr_sig') || ''
 
   const [customerName, setCustomerName] = useState('')
   const [docs, setDocs] = useState([newDoc()])
@@ -33,8 +43,123 @@ function UploadContent() {
   const [isUploading, setIsUploading] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
   const [jobs, setJobs] = useState([])
+  const [access, setAccess] = useState({
+    status: 'checking',
+    message: 'Checking QR access...',
+    expires: 0,
+    secondsRemaining: 0,
+  })
 
   const readyDocs = docs.filter((doc) => doc.file)
+  const hasQrAccess = access.status === 'valid'
+  const qrAccessQuery = useMemo(() => {
+    const params = new URLSearchParams()
+    params.set('shop', shopId)
+    params.set('qr_expires', qrExpires)
+    params.set('qr_nonce', qrNonce)
+    params.set('qr_sig', qrSignature)
+    return params.toString()
+  }, [shopId, qrExpires, qrNonce, qrSignature])
+
+  const verifyQrAccess = useCallback(async () => {
+    if (!qrExpires || !qrNonce || !qrSignature) {
+      setAccess({
+        status: 'missing',
+        message: 'Scan the latest QR code at the shop counter to open uploads.',
+        expires: 0,
+        secondsRemaining: 0,
+      })
+      return false
+    }
+
+    setAccess((current) => ({
+      ...current,
+      status: current.status === 'valid' ? 'valid' : 'checking',
+      message: current.status === 'valid' ? current.message : 'Checking QR access...',
+    }))
+
+    try {
+      const response = await fetch(`/api/qr-access/verify?${qrAccessQuery}`, {
+        cache: 'no-store',
+      })
+      const result = await response.json()
+
+      if (!response.ok || !result.ok) {
+        setAccess({
+          status: result.reason || 'invalid',
+          message: result.message || 'This QR code is not valid. Please scan the latest QR at the counter.',
+          expires: 0,
+          secondsRemaining: 0,
+        })
+        return false
+      }
+
+      setAccess({
+        status: 'valid',
+        message: 'QR access active',
+        expires: result.expires,
+        secondsRemaining: result.secondsRemaining,
+      })
+      return true
+    } catch {
+      setAccess({
+        status: 'invalid',
+        message: 'Could not verify this QR code. Check your connection and scan again.',
+        expires: 0,
+        secondsRemaining: 0,
+      })
+      return false
+    }
+  }, [qrAccessQuery, qrExpires, qrNonce, qrSignature])
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      verifyQrAccess()
+    }, 0)
+
+    const interval = window.setInterval(() => {
+      verifyQrAccess()
+    }, 30 * 1000)
+
+    return () => {
+      window.clearTimeout(timeout)
+      window.clearInterval(interval)
+    }
+  }, [verifyQrAccess])
+
+  useEffect(() => {
+    if (access.status !== 'valid' || !access.expires) return undefined
+
+    const tick = () => {
+      const secondsRemaining = access.expires - Math.floor(Date.now() / 1000)
+
+      if (secondsRemaining <= 0) {
+        setAccess({
+          status: 'expired',
+          message: 'This QR code has expired. Please scan the latest QR at the counter.',
+          expires: 0,
+          secondsRemaining: 0,
+        })
+        setScreen('form')
+        setErrorMsg('')
+        return
+      }
+
+      setAccess((current) => ({
+        ...current,
+        secondsRemaining,
+      }))
+    }
+
+    const timeout = window.setTimeout(tick, 0)
+    const interval = window.setInterval(tick, 1000)
+
+    return () => {
+      window.clearTimeout(timeout)
+      window.clearInterval(interval)
+    }
+  }, [access.expires, access.status])
+
   const orderTotals = useMemo(() => {
     const totals = readyDocs.map(docTotals)
     return {
@@ -188,7 +313,20 @@ function UploadContent() {
     return ''
   }
 
-  const openPreview = () => {
+  const ensureQrAccess = async () => {
+    const isValid = await verifyQrAccess()
+
+    if (!isValid) {
+      setScreen('form')
+      setErrorMsg('QR access expired. Please scan the latest QR at the counter.')
+    }
+
+    return isValid
+  }
+
+  const openPreview = async () => {
+    if (!(await ensureQrAccess())) return
+
     const validationError = validateOrder()
     if (validationError) {
       setErrorMsg(validationError)
@@ -209,6 +347,8 @@ function UploadContent() {
   }
 
   const handleUpload = async () => {
+    if (!(await ensureQrAccess())) return
+
     const validationError = validateOrder()
     if (validationError) {
       setErrorMsg(validationError)
@@ -312,6 +452,7 @@ function UploadContent() {
         docs={docs}
         readyDocs={readyDocs}
         isUploading={isUploading}
+        accessLocked={!hasQrAccess}
         onCancel={reset}
         onEdit={() => setScreen('form')}
         onPreview={openPreview}
@@ -319,16 +460,23 @@ function UploadContent() {
       />
 
       <main className="mx-auto max-w-5xl px-4 py-5 sm:py-8">
+        {hasQrAccess && screen !== 'success' && (
+          <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-900">
+            QR access active for {formatAccessTime(access.secondsRemaining)}. Upload before this code expires.
+          </div>
+        )}
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          {errorMsg && (
+          {!hasQrAccess ? (
+            <QrAccessPanel access={access} onRetry={verifyQrAccess} />
+          ) : errorMsg && (
             <div className="border-b border-red-200 bg-red-50 px-5 py-3 text-sm font-medium text-red-700">
               {errorMsg}
             </div>
           )}
 
-          {screen === 'success' ? (
+          {hasQrAccess && screen === 'success' ? (
             <SuccessPanel jobs={jobs} totalAmount={orderTotals.amount} onReset={reset} />
-          ) : screen === 'preview' ? (
+          ) : hasQrAccess && screen === 'preview' ? (
             <PreviewPanel
               docs={readyDocs}
               customerName={customerName}
@@ -338,7 +486,7 @@ function UploadContent() {
               onBack={() => setScreen('form')}
               onSubmit={handleUpload}
             />
-          ) : (
+          ) : hasQrAccess ? (
             <Home
               customerName={customerName}
               setCustomerName={setCustomerName}
@@ -351,9 +499,38 @@ function UploadContent() {
               onRemoveDoc={removeDocument}
               onSettingChange={updateDocSetting}
             />
-          )}
+          ) : null}
         </section>
       </main>
+    </div>
+  )
+}
+
+function QrAccessPanel({ access, onRetry }) {
+  const isChecking = access.status === 'checking'
+
+  return (
+    <div className="mx-auto flex max-w-xl flex-col items-center gap-4 px-5 py-12 text-center">
+      <div className="flex h-12 w-12 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-xl font-black text-slate-950">
+        QR
+      </div>
+      <div>
+        <h2 className="text-2xl font-black text-slate-950">Scan the counter QR</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          {access.message}
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onRetry}
+        disabled={isChecking}
+        className="rounded-md bg-slate-950 px-5 py-2.5 text-sm font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-slate-300"
+      >
+        {isChecking ? 'Checking...' : 'Try again'}
+      </button>
+      <p className="text-xs font-semibold text-slate-500">
+        The shop QR refreshes every 5 minutes to prevent old links from being reused.
+      </p>
     </div>
   )
 }

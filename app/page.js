@@ -7,7 +7,7 @@ import Home from '@/components/Home'
 import PreviewPanel from '@/components/Preview'
 import PrintNavbar from '@/components/Navbar'
 import SuccessPanel from '@/components/SuccessPanel'
-import { supabase } from '@/lib/supabase'
+import { supabase, supabaseConfigError } from '@/lib/supabase'
 import {
   MAX_FILE_SIZE,
   PRINT_LAYOUTS,
@@ -52,6 +52,7 @@ function UploadContent() {
 
   const readyDocs = docs.filter((doc) => doc.file)
   const hasQrAccess = access.status === 'valid'
+  const canUpload = hasQrAccess && !supabaseConfigError
   const qrAccessQuery = useMemo(() => {
     const params = new URLSearchParams()
     params.set('shop', shopId)
@@ -133,10 +134,10 @@ function UploadContent() {
     const tick = () => {
       const secondsRemaining = access.expires - Math.floor(Date.now() / 1000)
 
-      if (secondsRemaining <= 0) {
+      if (secondsRemaining < 0) {
         setAccess({
           status: 'expired',
-          message: 'This QR code has expired. Please scan the latest QR at the counter.',
+          message: 'This QR has expired. Please scan the latest counter QR again.',
           expires: 0,
           secondsRemaining: 0,
         })
@@ -318,7 +319,7 @@ function UploadContent() {
 
     if (!isValid) {
       setScreen('form')
-      setErrorMsg('QR access expired. Please scan the latest QR at the counter.')
+      setErrorMsg('This QR has expired. Please scan the latest counter QR again.')
     }
 
     return isValid
@@ -348,6 +349,12 @@ function UploadContent() {
 
   const handleUpload = async () => {
     if (!(await ensureQrAccess())) return
+
+    if (!supabase) {
+      setScreen('form')
+      setErrorMsg(`Upload is not configured. ${supabaseConfigError}`)
+      return
+    }
 
     const validationError = validateOrder()
     if (validationError) {
@@ -452,7 +459,7 @@ function UploadContent() {
         docs={docs}
         readyDocs={readyDocs}
         isUploading={isUploading}
-        accessLocked={!hasQrAccess}
+        accessLocked={!canUpload}
         onCancel={reset}
         onEdit={() => setScreen('form')}
         onPreview={openPreview}
@@ -468,15 +475,17 @@ function UploadContent() {
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           {!hasQrAccess ? (
             <QrAccessPanel access={access} onRetry={verifyQrAccess} />
+          ) : supabaseConfigError ? (
+            <SetupErrorPanel message={supabaseConfigError} />
           ) : errorMsg && (
             <div className="border-b border-red-200 bg-red-50 px-5 py-3 text-sm font-medium text-red-700">
               {errorMsg}
             </div>
           )}
 
-          {hasQrAccess && screen === 'success' ? (
+          {canUpload && screen === 'success' ? (
             <SuccessPanel jobs={jobs} totalAmount={orderTotals.amount} onReset={reset} />
-          ) : hasQrAccess && screen === 'preview' ? (
+          ) : canUpload && screen === 'preview' ? (
             <PreviewPanel
               docs={readyDocs}
               customerName={customerName}
@@ -486,7 +495,7 @@ function UploadContent() {
               onBack={() => setScreen('form')}
               onSubmit={handleUpload}
             />
-          ) : hasQrAccess ? (
+          ) : canUpload ? (
             <Home
               customerName={customerName}
               setCustomerName={setCustomerName}
@@ -529,8 +538,24 @@ function QrAccessPanel({ access, onRetry }) {
         {isChecking ? 'Checking...' : 'Try again'}
       </button>
       <p className="text-xs font-semibold text-slate-500">
-        The shop QR refreshes every 5 minutes to prevent old links from being reused.
+        The shop QR refreshes regularly. Upload access lasts until the signed QR expiry.
       </p>
+    </div>
+  )
+}
+
+function SetupErrorPanel({ message }) {
+  return (
+    <div className="mx-auto flex max-w-xl flex-col items-center gap-3 px-5 py-12 text-center">
+      <div className="flex h-12 w-12 items-center justify-center rounded-full border border-red-200 bg-red-50 text-xl font-black text-red-700">
+        !
+      </div>
+      <div>
+        <h2 className="text-2xl font-black text-slate-950">Upload setup needed</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          {message} Add the required Supabase environment variables on the website server.
+        </p>
+      </div>
     </div>
   )
 }

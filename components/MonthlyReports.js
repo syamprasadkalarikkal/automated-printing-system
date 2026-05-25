@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 import { readableError } from '@/utils/printUtils'
-import { supabase } from '@/lib/supabase'
+import { supabase, supabaseConfigError } from '@/lib/supabase'
 
 const IST_TIME_ZONE = 'Asia/Kolkata'
 const MONEY = new Intl.NumberFormat('en-IN', {
@@ -244,6 +244,11 @@ export default function MonthlyReports() {
     let isMounted = true
 
     async function loadSession() {
+      if (!supabase) {
+        setAuthReady(true)
+        return
+      }
+
       const { data } = await supabase.auth.getSession()
       if (!isMounted) return
       setSession(data.session)
@@ -251,6 +256,10 @@ export default function MonthlyReports() {
     }
 
     loadSession()
+
+    if (!supabase) return () => {
+      isMounted = false
+    }
 
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession)
@@ -264,7 +273,7 @@ export default function MonthlyReports() {
   }, [])
 
   useEffect(() => {
-    if (!session) return undefined
+    if (!session || !supabase) return undefined
 
     const timeout = window.setTimeout(async () => {
       setIsLoading(true)
@@ -343,6 +352,27 @@ export default function MonthlyReports() {
       <main className="flex min-h-dvh items-center justify-center bg-slate-50 px-4 text-slate-950">
         <div className="rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-sm">
           <p className="text-sm font-semibold text-slate-600">Loading monthly reports...</p>
+        </div>
+      </main>
+    )
+  }
+
+  if (supabaseConfigError) {
+    return (
+      <main className="flex min-h-dvh items-center justify-center bg-slate-50 px-4 text-slate-950">
+        <div className="w-full max-w-md rounded-lg border border-red-200 bg-white p-6 text-center shadow-sm">
+          <Image
+            src="/logo/printq-logo.svg"
+            alt="PrintQ"
+            width={156}
+            height={40}
+            priority
+            className="mx-auto h-10 w-[156px] object-contain"
+          />
+          <h1 className="mt-5 text-2xl font-black">Reports setup needed</h1>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            {supabaseConfigError} Add the required Supabase environment variables before using reports.
+          </p>
         </div>
       </main>
     )

@@ -4,7 +4,7 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { readableError } from '@/utils/printUtils'
-import { supabase } from '@/lib/supabase'
+import { supabase, supabaseConfigError } from '@/lib/supabase'
 
 const IST_TIME_ZONE = 'Asia/Kolkata'
 const MONEY = new Intl.NumberFormat('en-IN', {
@@ -94,6 +94,7 @@ const dayCsvHeaders = ['Date', 'Day', 'Black & White Prints', 'Color Prints', 'T
 export default function AdminDashboard() {
   const [session, setSession] = useState(null)
   const [authReady, setAuthReady] = useState(false)
+  const [showPasswordLogin, setShowPasswordLogin] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [authMessage, setAuthMessage] = useState('')
@@ -109,6 +110,11 @@ export default function AdminDashboard() {
     let isMounted = true
 
     async function loadSession() {
+      if (!supabase) {
+        setAuthReady(true)
+        return
+      }
+
       const { data } = await supabase.auth.getSession()
       if (!isMounted) return
       setSession(data.session)
@@ -116,6 +122,10 @@ export default function AdminDashboard() {
     }
 
     loadSession()
+
+    if (!supabase) return () => {
+      isMounted = false
+    }
 
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession)
@@ -129,12 +139,13 @@ export default function AdminDashboard() {
   }, [])
 
   const cleanupCompletedQueueRows = useCallback(async () => {
+    if (!supabase) return
     const { error } = await supabase.rpc('cleanup_completed_print_jobs')
     if (error) throw error
   }, [])
 
   const loadDashboardData = useCallback(async (showLoading = true) => {
-    if (!session) return
+    if (!session || !supabase) return
 
     if (showLoading) setIsLoading(true)
     setDataError('')
@@ -208,18 +219,29 @@ export default function AdminDashboard() {
     setAuthMessage('')
     setIsSigningIn(true)
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    })
+    try {
+      if (!supabase) throw new Error(supabaseConfigError || 'Supabase is not configured.')
 
-    if (error) setAuthError(readableError(error, 'Could not sign in. Check the admin email and password.'))
-    else setAuthMessage('Signed in successfully.')
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      })
 
-    setIsSigningIn(false)
+      if (error) setAuthError(readableError(error, 'Could not sign in. Check the admin email and password.'))
+      else {
+        setSession(data.session)
+        setAuthMessage('Signed in successfully.')
+      }
+    } catch (error) {
+      setAuthError(readableError(error, 'Could not sign in. Check the admin email and password.'))
+    } finally {
+      setIsSigningIn(false)
+    }
   }
 
   const markFileDeleted = async (job, storageDeletedAt) => {
+    if (!supabase) throw new Error(supabaseConfigError || 'Supabase is not configured.')
+
     const { error } = await supabase
       .from('print_jobs')
       .update({ storage_deleted_at: storageDeletedAt })
@@ -229,6 +251,7 @@ export default function AdminDashboard() {
   }
 
   const deleteStoredFile = async (job) => {
+    if (!supabase) throw new Error(supabaseConfigError || 'Supabase is not configured.')
     if (!job.file_path || job.storage_deleted_at) return ''
 
     const { error } = await supabase.storage
@@ -299,7 +322,7 @@ export default function AdminDashboard() {
   }
 
   const signOut = async () => {
-    await supabase.auth.signOut()
+    if (supabase) await supabase.auth.signOut()
     setJobs([])
     setCompletedJobs([])
   }
@@ -311,6 +334,12 @@ export default function AdminDashboard() {
           <p className="text-sm font-semibold text-slate-600">Loading admin dashboard...</p>
         </div>
       </main>
+    )
+  }
+
+  if (supabaseConfigError) {
+    return (
+      <AdminSetupError message={supabaseConfigError} />
     )
   }
 
@@ -354,52 +383,63 @@ export default function AdminDashboard() {
               <h2 className="mt-1 text-2xl font-black">Sign in to admin</h2>
             </div>
 
-            <form onSubmit={signInWithPassword} className="pt-5">
-              <label className="block text-sm font-bold text-slate-900">
-                Admin email
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  className="form-input mt-2"
-                  placeholder="owner@example.com"
-                />
-              </label>
-              <label className="mt-4 block text-sm font-bold text-slate-900">
-                Password
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  className="form-input mt-2"
-                  placeholder="Enter admin password"
-                />
-              </label>
-              <p className="mt-2 text-xs leading-5 text-slate-500">
-                Use an admin account that already exists in Supabase Auth.
-              </p>
+            {showPasswordLogin ? (
+              <form onSubmit={signInWithPassword} className="pt-5">
+                <label className="block text-sm font-bold text-slate-900">
+                  Admin email
+                  <input
+                    type="email"
+                    required
+                    autoFocus
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    className="form-input mt-2"
+                    placeholder="owner@example.com"
+                  />
+                </label>
+                <label className="mt-4 block text-sm font-bold text-slate-900">
+                  Password
+                  <input
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    className="form-input mt-2"
+                    placeholder="Enter admin password"
+                  />
+                </label>
+                <p className="mt-2 text-xs leading-5 text-slate-500">
+                  Use an admin account that already exists in Supabase Auth.
+                </p>
 
-              {authError && (
-                <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
-                  {authError}
-                </div>
-              )}
-              {authMessage && (
-                <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">
-                  {authMessage}
-                </div>
-              )}
+                {authError && (
+                  <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+                    {authError}
+                  </div>
+                )}
+                {authMessage && (
+                  <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">
+                    {authMessage}
+                  </div>
+                )}
 
+                <button
+                  type="submit"
+                  disabled={isSigningIn}
+                  className="mt-5 w-full rounded-md bg-slate-950 px-4 py-3 text-sm font-black text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {isSigningIn ? 'Signing in...' : 'Sign in'}
+                </button>
+              </form>
+            ) : (
               <button
-                type="submit"
-                disabled={isSigningIn}
-                className="mt-5 w-full rounded-md bg-slate-950 px-4 py-3 text-sm font-black text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                type="button"
+                onClick={() => setShowPasswordLogin(true)}
+                className="mt-5 w-full rounded-md bg-slate-950 px-4 py-3 text-sm font-black text-white shadow-sm hover:bg-slate-800"
               >
-                {isSigningIn ? 'Signing in...' : 'Sign in'}
+                Login using password
               </button>
-            </form>
+            )}
           </div>
         </section>
       </main>
@@ -654,6 +694,27 @@ export default function AdminDashboard() {
             </table>
           </div>
         </section>
+      </div>
+    </main>
+  )
+}
+
+function AdminSetupError({ message }) {
+  return (
+    <main className="flex min-h-dvh items-center justify-center bg-slate-50 px-4 text-slate-950">
+      <div className="w-full max-w-md rounded-lg border border-red-200 bg-white p-6 text-center shadow-sm">
+        <Image
+          src="/logo/printq-logo.svg"
+          alt="PrintQ"
+          width={156}
+          height={40}
+          priority
+          className="mx-auto h-10 w-[156px] object-contain"
+        />
+        <h1 className="mt-5 text-2xl font-black">Admin setup needed</h1>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          {message} Add the required Supabase environment variables before using the dashboard.
+        </p>
       </div>
     </main>
   )

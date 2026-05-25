@@ -3,13 +3,16 @@ import { NextResponse } from 'next/server'
 
 export const runtime = 'nodejs'
 
-const QR_WINDOW_SECONDS = 5 * 60
-const CLOCK_SKEW_SECONDS = 15
-const MAX_FUTURE_SECONDS = QR_WINDOW_SECONDS + CLOCK_SKEW_SECONDS
+const MAX_FUTURE_SECONDS = 30 * 60
 const SHOP_ID_PATTERN = /^[a-zA-Z0-9_-]{2,64}$/
 const NONCE_PATTERN = /^[a-zA-Z0-9_-]{8,96}$/
+const UNIX_SECONDS_PATTERN = /^[0-9]{1,16}$/
 
-const json = (body, status = 200) => NextResponse.json(body, { status })
+const json = (body, status = 200) => {
+  const response = NextResponse.json(body, { status })
+  response.headers.set('Cache-Control', 'no-store')
+  return response
+}
 
 const base64Url = (buffer) =>
   buffer
@@ -42,11 +45,11 @@ export async function GET(request) {
 
   const params = request.nextUrl.searchParams
   const shop = params.get('shop') || ''
-  const expires = Number(params.get('qr_expires'))
+  const qrExpires = params.get('qr_expires') || ''
   const nonce = params.get('qr_nonce') || ''
   const signature = params.get('qr_sig') || ''
 
-  if (!shop || !expires || !nonce || !signature) {
+  if (!shop || !qrExpires || !nonce || !signature) {
     return json({
       ok: false,
       reason: 'missing',
@@ -62,7 +65,7 @@ export async function GET(request) {
     }, 400)
   }
 
-  if (!Number.isInteger(expires) || expires < 1 || !NONCE_PATTERN.test(nonce)) {
+  if (!UNIX_SECONDS_PATTERN.test(qrExpires) || !NONCE_PATTERN.test(nonce)) {
     return json({
       ok: false,
       reason: 'invalid',
@@ -70,13 +73,34 @@ export async function GET(request) {
     }, 400)
   }
 
+  const expires = Number(qrExpires)
+
+  if (!Number.isSafeInteger(expires) || expires < 1) {
+    return json({
+      ok: false,
+      reason: 'invalid',
+      message: 'This QR code is invalid. Please scan the latest QR at the counter.',
+    }, 400)
+  }
+
+  const payload = `${shop}.${qrExpires}.${nonce}`
+  const expectedSignature = signPayload(payload, secret)
+
+  if (!safeEqual(signature, expectedSignature)) {
+    return json({
+      ok: false,
+      reason: 'invalid',
+      message: 'This QR code could not be verified. Please scan the latest QR at the counter.',
+    }, 401)
+  }
+
   const now = Math.floor(Date.now() / 1000)
 
-  if (expires <= now) {
+  if (now > expires) {
     return json({
       ok: false,
       reason: 'expired',
-      message: 'This QR code has expired. Please scan the latest QR at the counter.',
+      message: 'This QR has expired. Please scan the latest counter QR again.',
     }, 410)
   }
 
@@ -86,17 +110,6 @@ export async function GET(request) {
       reason: 'invalid',
       message: 'This QR code expiry is too far ahead. Please scan the latest QR at the counter.',
     }, 400)
-  }
-
-  const payload = `${shop}.${expires}.${nonce}`
-  const expectedSignature = signPayload(payload, secret)
-
-  if (!safeEqual(signature, expectedSignature)) {
-    return json({
-      ok: false,
-      reason: 'invalid',
-      message: 'This QR code could not be verified. Please scan the latest QR at the counter.',
-    }, 401)
   }
 
   return json({

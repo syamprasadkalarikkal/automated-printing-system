@@ -33,6 +33,7 @@ function UploadContent() {
     searchParams.get('shop') ||
     process.env.NEXT_PUBLIC_DEFAULT_SHOP_ID ||
     'main-counter'
+  const desktopId = searchParams.get('desktop') || ''
   const qrExpires = searchParams.get('qr_expires') || ''
   const qrNonce = searchParams.get('qr_nonce') || ''
   const qrSignature = searchParams.get('qr_sig') || ''
@@ -56,14 +57,15 @@ function UploadContent() {
   const qrAccessQuery = useMemo(() => {
     const params = new URLSearchParams()
     params.set('shop', shopId)
+    params.set('desktop', desktopId)
     params.set('qr_expires', qrExpires)
     params.set('qr_nonce', qrNonce)
     params.set('qr_sig', qrSignature)
     return params.toString()
-  }, [shopId, qrExpires, qrNonce, qrSignature])
+  }, [shopId, desktopId, qrExpires, qrNonce, qrSignature])
 
   const verifyQrAccess = useCallback(async () => {
-    if (!qrExpires || !qrNonce || !qrSignature) {
+    if (!desktopId || !qrExpires || !qrNonce || !qrSignature) {
       setAccess({
         status: 'missing',
         message: 'Scan the latest QR code at the shop counter to open uploads.',
@@ -111,7 +113,7 @@ function UploadContent() {
       })
       return false
     }
-  }, [qrAccessQuery, qrExpires, qrNonce, qrSignature])
+  }, [desktopId, qrAccessQuery, qrExpires, qrNonce, qrSignature])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {

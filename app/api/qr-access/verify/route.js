@@ -5,6 +5,7 @@ export const runtime = 'nodejs'
 
 const MAX_FUTURE_SECONDS = 30 * 60
 const SHOP_ID_PATTERN = /^[a-zA-Z0-9_-]{2,64}$/
+const DESKTOP_ID_PATTERN = /^[a-zA-Z0-9_-]{2,96}$/
 const NONCE_PATTERN = /^[a-zA-Z0-9_-]{8,96}$/
 const UNIX_SECONDS_PATTERN = /^[0-9]{1,16}$/
 
@@ -45,11 +46,12 @@ export async function GET(request) {
 
   const params = request.nextUrl.searchParams
   const shop = params.get('shop') || ''
+  const desktop = params.get('desktop') || ''
   const qrExpires = params.get('qr_expires') || ''
   const nonce = params.get('qr_nonce') || ''
   const signature = params.get('qr_sig') || ''
 
-  if (!shop || !qrExpires || !nonce || !signature) {
+  if (!shop || !desktop || !qrExpires || !nonce || !signature) {
     return json({
       ok: false,
       reason: 'missing',
@@ -62,6 +64,14 @@ export async function GET(request) {
       ok: false,
       reason: 'invalid',
       message: 'This QR code has an invalid shop id.',
+    }, 400)
+  }
+
+  if (!DESKTOP_ID_PATTERN.test(desktop)) {
+    return json({
+      ok: false,
+      reason: 'invalid',
+      message: 'This QR code has an invalid desktop id.',
     }, 400)
   }
 
@@ -83,7 +93,7 @@ export async function GET(request) {
     }, 400)
   }
 
-  const payload = `${shop}.${qrExpires}.${nonce}`
+  const payload = `${shop}.${desktop}.${qrExpires}.${nonce}`
   const expectedSignature = signPayload(payload, secret)
 
   if (!safeEqual(signature, expectedSignature)) {
@@ -115,6 +125,7 @@ export async function GET(request) {
   return json({
     ok: true,
     shop,
+    desktop,
     expires,
     expiresAt: new Date(expires * 1000).toISOString(),
     secondsRemaining: expires - now,

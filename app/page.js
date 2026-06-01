@@ -430,31 +430,14 @@ function UploadContent() {
         throw new Error(`Database save failed: ${readableError(dbError, 'Supabase could not save the print job.')}`)
       }
 
-      let fallbackToken = null
-      
       for (const [index, job] of (savedJobs || []).entries()) {
         const fallback = orderDocuments[index] || {}
-        let customerToken = job?.customer_token || formatCustomerToken(job?.queue_number)
-        
-        // If database didn't generate a token (e.g., no auto-increment sequence),
-        // generate a unique one client-side for this order
-        if (customerToken === 'C--') {
-          if (!fallbackToken) {
-            // Generate unique token only once per order
-            const timestamp = Math.floor(Date.now() / 1000)
-            const randomSuffix = Math.floor(Math.random() * 100)
-            const uniqueNumber = ((timestamp % 10000) * 100 + randomSuffix) % 99 + 1
-            fallbackToken = formatCustomerToken(uniqueNumber)
-          }
-          customerToken = fallbackToken
-        }
-        
         createdJobs.push({
           fileName: job?.original_file_name || fallback.original_file_name,
           pages: job?.total_print_pages ?? fallback.total_print_pages,
           amount: job?.total_amount ?? fallback.total_amount,
           queueNumber: job?.queue_number ?? null,
-          customerToken: customerToken,
+          customerToken: job?.customer_token || formatCustomerToken(job?.queue_number),
         })
       }
 

@@ -424,10 +424,30 @@ function UploadContent() {
       const { data: savedJobs, error: dbError } = await supabase
         .from('print_jobs')
         .insert(orderDocuments)
-        .select('original_file_name,total_print_pages,total_amount,queue_number,customer_token')
+        .select('id,original_file_name,total_print_pages,total_amount,queue_number')
 
       if (dbError) {
         throw new Error(`Database save failed: ${readableError(dbError, 'Supabase could not save the print job.')}`)
+      }
+
+      const orderQueueNumber = (savedJobs || []).find((job) => Number(job?.queue_number) > 0)?.queue_number
+      const orderToken = formatCustomerToken(orderQueueNumber)
+
+      if (orderToken === 'C--') {
+        throw new Error('Database save failed: queue numbers are not configured. Set print_jobs.queue_number to auto-increment, then retry.')
+      }
+
+      const savedJobIds = (savedJobs || []).map((job) => job.id).filter(Boolean)
+
+      if (savedJobIds.length) {
+        const { error: tokenUpdateError } = await supabase
+          .from('print_jobs')
+          .update({ customer_token: orderToken })
+          .in('id', savedJobIds)
+
+        if (tokenUpdateError) {
+          throw new Error(`Token update failed: ${readableError(tokenUpdateError, 'Supabase could not save the customer token.')}`)
+        }
       }
 
       for (const [index, job] of (savedJobs || []).entries()) {
@@ -437,7 +457,7 @@ function UploadContent() {
           pages: job?.total_print_pages ?? fallback.total_print_pages,
           amount: job?.total_amount ?? fallback.total_amount,
           queueNumber: job?.queue_number ?? null,
-          customerToken: job?.customer_token || formatCustomerToken(job?.queue_number),
+          customerToken: orderToken,
         })
       }
 

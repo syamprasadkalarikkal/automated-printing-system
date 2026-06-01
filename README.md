@@ -126,6 +126,62 @@ npm run lint
 
 This app can be deployed to Vercel or any platform that supports Next.js. Add the same environment variables in the hosting provider, configure Supabase Auth/Storage/RLS for production, and use HTTPS URLs when generating QR codes.
 
+### Production Checklist
+
+Before deploying to production, ensure:
+
+- [ ] Environment variables are securely configured (never commit `.env.local`)
+- [ ] `QR_ACCESS_SECRET` is a strong, randomly generated secret (`openssl rand -base64 32`)
+- [ ] Supabase Row Level Security (RLS) policies are properly configured
+- [ ] Database migrations and setup are complete (tables, sequences, triggers)
+- [ ] HTTPS is enforced for all traffic
+- [ ] Supabase Storage bucket `print-queue` has appropriate access controls
+- [ ] Admin auth credentials are rotated and secure
+- [ ] Monitoring and error tracking is configured (e.g., Sentry)
+- [ ] Database backups are configured
+- [ ] CORS origins are properly set in Supabase (`https://yourdomain.com`)
+- [ ] Email notifications for failed uploads are configured (optional)
+
+### Vercel Deployment
+
+```bash
+# Install Vercel CLI
+npm install -g vercel
+
+# Deploy
+vercel
+```
+
+Then add environment variables in Vercel project settings:
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `NEXT_PUBLIC_DEFAULT_SHOP_ID`
+- `QR_ACCESS_SECRET`
+
+### Security Considerations
+
+- QR codes are time-limited and should be generated server-side
+- All uploads are validated by file type and size
+- Customer tokens are generated server-side from auto-increment sequences
+- Sensitive errors are caught and not exposed to clients
+- Rate limiting should be configured at the proxy/firewall level
+- Regular security audits and dependency updates are recommended
+
+### Performance Optimization
+
+- PDFs are optimized client-side before upload
+- Images are converted to PDF format for consistent printing
+- Storage files use caching headers for efficiency
+- React Compiler optimization is enabled for faster renders
+
+### Monitoring and Logging
+
+Consider configuring:
+- Error tracking (Sentry, Rollbar)
+- Database query monitoring
+- Storage access logs
+- Upload success/failure metrics
+
 ## Project Structure
 
 ```text

@@ -80,13 +80,14 @@ The app expects:
 
 - A Storage bucket named `print-queue`
 - Supabase Auth enabled for admin password login
-- A `print_jobs` table for active print queue rows
-- A `completed_print_jobs` table or view for daily report summaries
-- An RPC function named `cleanup_completed_print_jobs`
+- A `shop_users` table mapping each Supabase Auth admin email to one `shop_id`
+- A `print_jobs` table for print queue rows, including completed rows used for reporting
+- A `shop_completed_print_jobs` view that calculates shop-wise daily report summaries directly from completed `print_jobs`
+- An RPC function named `complete_print_job_for_shop`
 
 The code reads and writes fields such as `shop_id`, `customer_name`, `file_path`, `original_file_name`, `file_size`, `file_type`, `page_count`, `total_print_pages`, `copies`, `paper_size`, `orientation`, `color_mode`, `two_sided`, `pages_per_side`, `page_range`, `document_number`, `order_document_count`, `price_per_page`, `total_amount`, `notes`, `queue_number`, `customer_token`, `status`, `completed_at`, and `storage_deleted_at`.
 
-Make sure Row Level Security policies allow customers to create print jobs and upload files, while admin users can read and update queue/report data.
+Run or adapt [`supabase/shop-users-setup.sql`](supabase/shop-users-setup.sql) to create the `shop_users` auth trigger, remove the old `completed_jobs` archive table, and create the `shop_completed_print_jobs` report view grouped by `shop_id` and the completed print job date. Make sure Row Level Security policies allow customers to create print jobs and upload files, while admin users can read and update only their assigned shop's queue/report data.
 
 ## QR Upload Access
 

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { readableError } from '@/utils/printUtils'
 import { supabase, supabaseConfigError } from '@/lib/supabase'
+import { getShopAccessForSession } from '@/lib/shopAccess'
 
 const IST_TIME_ZONE = 'Asia/Kolkata'
 const MONEY = new Intl.NumberFormat('en-IN', {
@@ -35,6 +36,44 @@ const dateKey = (value) =>
     year: 'numeric',
   }).format(value)
 
+const isReportDateKey = (key) => {
+  const match = key.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return false
+
+  const [, yearText, monthText, dayText] = match
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  const date = new Date(Date.UTC(year, month - 1, day))
+
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+
+const reportDateKey = (value) => {
+  if (!value) return ''
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? '' : dateKey(value)
+
+  const text = String(value)
+  const match = text.match(/^(\d{4}-\d{2}-\d{2})(?:$|[T\s])/)
+  if (match) return isReportDateKey(match[1]) ? match[1] : ''
+
+  const date = new Date(text)
+  return Number.isNaN(date.getTime()) ? '' : dateKey(date)
+}
+
+const reportDateValue = (value) => {
+  const key = reportDateKey(value)
+  if (!key) return null
+
+  const date = new Date(`${key}T00:00:00+05:30`)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+const reportDateLabel = (value, fallback = 'Unknown day') => {
+  const date = reportDateValue(value)
+  return date ? DATE.format(date) : fallback
+}
+
 const startOfToday = () => {
   const key = dateKey(new Date())
   return new Date(`${key}T00:00:00+05:30`)
@@ -60,8 +99,7 @@ const csvCell = (value) => {
 }
 
 const csvDateLabel = (reportDate) => {
-  if (!reportDate) return ''
-  return DATE.format(new Date(`${reportDate}T00:00:00+05:30`))
+  return reportDateLabel(reportDate, '')
 }
 
 const csvText = (headers, rows) =>
@@ -81,7 +119,7 @@ const downloadCsvFile = (filename, csv) => {
 }
 
 const dayCsvRow = (day) => [
-  day.report_date,
+  reportDateKey(day.report_date) || day.report_date,
   csvDateLabel(day.report_date),
   numberValue(day.black_and_white_prints),
   numberValue(day.color_prints),
@@ -94,6 +132,9 @@ const dayCsvHeaders = ['Date', 'Day', 'Black & White Prints', 'Color Prints', 'T
 export default function AdminDashboard() {
   const [session, setSession] = useState(null)
   const [authReady, setAuthReady] = useState(false)
+  const [shopAccess, setShopAccess] = useState(null)
+  const [shopAccessError, setShopAccessError] = useState('')
+  const [isLoadingShopAccess, setIsLoadingShopAccess] = useState(false)
   const [showPasswordLogin, setShowPasswordLogin] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -105,6 +146,7 @@ export default function AdminDashboard() {
   const [isLoading, setIsLoading] = useState(false)
   const [dataError, setDataError] = useState('')
   const [actionJobId, setActionJobId] = useState('')
+  const activeShopId = shopAccess?.shopId || ''
 
   useEffect(() => {
     let isMounted = true
@@ -129,6 +171,10 @@ export default function AdminDashboard() {
 
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession)
+      setShopAccess(null)
+      setShopAccessError('')
+      setJobs([])
+      setCompletedJobs([])
       setAuthReady(true)
     })
 
@@ -138,30 +184,58 @@ export default function AdminDashboard() {
     }
   }, [])
 
-  const cleanupCompletedQueueRows = useCallback(async () => {
-    if (!supabase) return
-    const { error } = await supabase.rpc('cleanup_completed_print_jobs')
-    if (error) throw error
-  }, [])
+  useEffect(() => {
+    if (!session) return undefined
+
+    let isMounted = true
+
+    async function loadShopAccess() {
+      setIsLoadingShopAccess(true)
+      setShopAccessError('')
+
+      try {
+        const nextShopAccess = await getShopAccessForSession(session)
+        if (!isMounted) return
+        setShopAccess(nextShopAccess)
+      } catch (error) {
+        if (!isMounted) return
+        setShopAccess(null)
+        setJobs([])
+        setCompletedJobs([])
+        setShopAccessError(readableError(error, 'This admin email is not assigned to a shop.'))
+      } finally {
+        if (isMounted) setIsLoadingShopAccess(false)
+      }
+    }
+
+    loadShopAccess()
+
+    return () => {
+      isMounted = false
+    }
+  }, [session])
 
   const loadDashboardData = useCallback(async (showLoading = true) => {
-    if (!session || !supabase) return
+    if (!session || !supabase || !activeShopId) return
 
     if (showLoading) setIsLoading(true)
     setDataError('')
 
     try {
-      await cleanupCompletedQueueRows()
+      const completedQueueCutoff = new Date(Date.now() - COMPLETED_QUEUE_RETENTION_MS).toISOString()
 
       const [queueResult, archiveResult] = await Promise.all([
         supabase
           .from('print_jobs')
           .select('*')
+          .eq('shop_id', activeShopId)
+          .or(`status.is.null,status.neq.completed,completed_at.gte.${completedQueueCutoff}`)
           .order('created_at', { ascending: false })
           .limit(1000),
         supabase
-          .from('completed_print_jobs')
+          .from('shop_completed_print_jobs')
           .select('*')
+          .eq('shop_id', activeShopId)
           .order('report_date', { ascending: false })
           .limit(1000),
       ])
@@ -178,7 +252,7 @@ export default function AdminDashboard() {
     } finally {
       if (showLoading) setIsLoading(false)
     }
-  }, [cleanupCompletedQueueRows, session])
+  }, [activeShopId, session])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -189,19 +263,19 @@ export default function AdminDashboard() {
   }, [loadDashboardData])
 
   useEffect(() => {
-    if (!session) return undefined
+    if (!session || !activeShopId) return undefined
 
     const interval = window.setInterval(() => {
       loadDashboardData(false)
     }, 60 * 1000)
 
     return () => window.clearInterval(interval)
-  }, [loadDashboardData, session])
+  }, [activeShopId, loadDashboardData, session])
 
   const metrics = useMemo(() => {
     const todayStart = startOfToday()
     const todayKey = dateKey(todayStart)
-    const todaySummary = completedJobs.find((row) => row.report_date === todayKey)
+    const todaySummary = completedJobs.find((row) => reportDateKey(row.report_date) === todayKey)
 
     return {
       todayRevenue: numberValue(todaySummary?.total_earnings),
@@ -241,11 +315,13 @@ export default function AdminDashboard() {
 
   const markFileDeleted = async (job, storageDeletedAt) => {
     if (!supabase) throw new Error(supabaseConfigError || 'Supabase is not configured.')
+    if (!activeShopId) throw new Error('This admin email is not assigned to a shop.')
 
     const { error } = await supabase
       .from('print_jobs')
       .update({ storage_deleted_at: storageDeletedAt })
       .eq('id', job.id)
+      .eq('shop_id', activeShopId)
 
     if (error) throw error
   }
@@ -272,17 +348,20 @@ export default function AdminDashboard() {
     setDataError('')
 
     try {
-      const completedAt = new Date().toISOString()
       const { data, error } = await supabase
-        .from('print_jobs')
-        .update({ status: 'completed', completed_at: completedAt })
-        .eq('id', job.id)
-        .select('*')
+        .rpc('complete_print_job_for_shop', {
+          p_job_id: job.id,
+          p_shop_id: activeShopId,
+        })
         .single()
 
       if (error) throw error
 
-      const completedJob = data || { ...job, status: 'completed', completed_at: completedAt }
+      const completedJob = data || {
+        ...job,
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+      }
       await deleteStoredFile(completedJob)
 
       await loadDashboardData(false)
@@ -323,6 +402,8 @@ export default function AdminDashboard() {
 
   const signOut = async () => {
     if (supabase) await supabase.auth.signOut()
+    setShopAccess(null)
+    setShopAccessError('')
     setJobs([])
     setCompletedJobs([])
   }
@@ -446,6 +527,22 @@ export default function AdminDashboard() {
     )
   }
 
+  if (isLoadingShopAccess) {
+    return (
+      <main className="flex min-h-dvh items-center justify-center bg-slate-50 px-4 text-slate-950">
+        <div className="rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-sm">
+          <p className="text-sm font-semibold text-slate-600">Loading assigned shop...</p>
+        </div>
+      </main>
+    )
+  }
+
+  if (shopAccessError) {
+    return (
+      <AdminSetupError message={shopAccessError} onSignOut={signOut} />
+    )
+  }
+
   return (
     <main className="min-h-dvh bg-slate-100 text-slate-950">
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 backdrop-blur">
@@ -459,6 +556,9 @@ export default function AdminDashboard() {
             className="h-10 w-[156px] shrink-0 object-contain"
           />
           <div className="flex items-center gap-2">
+            <span className="hidden rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-800 sm:inline-flex">
+              Shop {activeShopId}
+            </span>
             <Link
               href="/admin/monthly-reports"
               className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-black text-slate-800 shadow-sm transition hover:bg-slate-50"
@@ -673,7 +773,7 @@ export default function AdminDashboard() {
                 {completedJobs.map((day) => (
                   <tr key={day.id || day.report_date} className="hover:bg-slate-50">
                     <td className="whitespace-nowrap px-4 py-3 font-bold text-slate-900">
-                      {DATE.format(new Date(`${day.report_date}T00:00:00+05:30`))}
+                      {reportDateLabel(day.report_date)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono">{numberValue(day.black_and_white_prints)}</td>
                     <td className="px-4 py-3 text-right font-mono">{numberValue(day.color_prints)}</td>
@@ -699,7 +799,7 @@ export default function AdminDashboard() {
   )
 }
 
-function AdminSetupError({ message }) {
+function AdminSetupError({ message, onSignOut }) {
   return (
     <main className="flex min-h-dvh items-center justify-center bg-slate-50 px-4 text-slate-950">
       <div className="w-full max-w-md rounded-lg border border-red-200 bg-white p-6 text-center shadow-sm">
@@ -713,8 +813,19 @@ function AdminSetupError({ message }) {
         />
         <h1 className="mt-5 text-2xl font-black">Admin setup needed</h1>
         <p className="mt-2 text-sm leading-6 text-slate-600">
-          {message} Add the required Supabase environment variables before using the dashboard.
+          {message} {onSignOut
+            ? 'Ask the developer to update shop_users, then sign in again.'
+            : 'Add the required Supabase environment variables before using the dashboard.'}
         </p>
+        {onSignOut && (
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="mt-5 rounded-md bg-slate-950 px-4 py-3 text-sm font-black text-white shadow-sm hover:bg-slate-800"
+          >
+            Sign out
+          </button>
+        )}
       </div>
     </main>
   )

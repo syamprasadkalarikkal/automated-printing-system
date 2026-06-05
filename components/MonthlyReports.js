@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 import { readableError } from '@/utils/printUtils'
 import { supabase, supabaseConfigError } from '@/lib/supabase'
+import { getShopAccessForSession } from '@/lib/shopAccess'
 
 const IST_TIME_ZONE = 'Asia/Kolkata'
 const MONEY = new Intl.NumberFormat('en-IN', {
@@ -36,11 +37,49 @@ const dateKey = (value) =>
     year: 'numeric',
   }).format(value)
 
-const monthKey = (reportDate) => reportDate?.slice(0, 7) || ''
+const isReportDateKey = (key) => {
+  const match = key.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return false
+
+  const [, yearText, monthText, dayText] = match
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  const date = new Date(Date.UTC(year, month - 1, day))
+
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+
+const reportDateKey = (value) => {
+  if (!value) return ''
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? '' : dateKey(value)
+
+  const text = String(value)
+  const match = text.match(/^(\d{4}-\d{2}-\d{2})(?:$|[T\s])/)
+  if (match) return isReportDateKey(match[1]) ? match[1] : ''
+
+  const date = new Date(text)
+  return Number.isNaN(date.getTime()) ? '' : dateKey(date)
+}
+
+const reportDateValue = (value) => {
+  const key = reportDateKey(value)
+  if (!key) return null
+
+  const date = new Date(`${key}T00:00:00+05:30`)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+const reportDateLabel = (value, fallback = 'Unknown day') => {
+  const date = reportDateValue(value)
+  return date ? DATE.format(date) : fallback
+}
+
+const monthKey = (reportDate) => reportDateKey(reportDate).slice(0, 7)
 
 const monthLabel = (key) => {
-  if (!key) return ''
-  return MONTH.format(new Date(`${key}-01T00:00:00+05:30`))
+  const date = reportDateValue(`${key}-01`)
+  return date ? MONTH.format(date) : ''
 }
 
 const csvCell = (value) => {
@@ -69,14 +108,13 @@ const downloadCsvFile = (filename, csv) => {
 }
 
 const csvDateLabel = (reportDate) => {
-  if (!reportDate) return ''
-  return DATE.format(new Date(`${reportDate}T00:00:00+05:30`))
+  return reportDateLabel(reportDate, '')
 }
 
 const dayCsvHeaders = ['Date', 'Day', 'Black & White Prints', 'Color Prints', 'Total Prints', 'Total Earnings']
 
 const dayCsvRow = (day) => [
-  day.report_date,
+  reportDateKey(day.report_date) || day.report_date,
   csvDateLabel(day.report_date),
   numberValue(day.black_and_white_prints),
   numberValue(day.color_prints),
@@ -236,9 +274,13 @@ const createMonthlyPdfBlob = async (month) => {
 export default function MonthlyReports() {
   const [session, setSession] = useState(null)
   const [authReady, setAuthReady] = useState(false)
+  const [shopAccess, setShopAccess] = useState(null)
+  const [shopAccessError, setShopAccessError] = useState('')
+  const [isLoadingShopAccess, setIsLoadingShopAccess] = useState(false)
   const [completedDays, setCompletedDays] = useState([])
   const [isLoading, setIsLoading] = useState(false)
   const [dataError, setDataError] = useState('')
+  const activeShopId = shopAccess?.shopId || ''
 
   useEffect(() => {
     let isMounted = true
@@ -263,6 +305,9 @@ export default function MonthlyReports() {
 
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession)
+      setShopAccess(null)
+      setShopAccessError('')
+      setCompletedDays([])
       setAuthReady(true)
     })
 
@@ -273,15 +318,46 @@ export default function MonthlyReports() {
   }, [])
 
   useEffect(() => {
-    if (!session || !supabase) return undefined
+    if (!session) return undefined
+
+    let isMounted = true
+
+    async function loadShopAccess() {
+      setIsLoadingShopAccess(true)
+      setShopAccessError('')
+
+      try {
+        const nextShopAccess = await getShopAccessForSession(session)
+        if (!isMounted) return
+        setShopAccess(nextShopAccess)
+      } catch (error) {
+        if (!isMounted) return
+        setShopAccess(null)
+        setCompletedDays([])
+        setShopAccessError(readableError(error, 'This admin email is not assigned to a shop.'))
+      } finally {
+        if (isMounted) setIsLoadingShopAccess(false)
+      }
+    }
+
+    loadShopAccess()
+
+    return () => {
+      isMounted = false
+    }
+  }, [session])
+
+  useEffect(() => {
+    if (!session || !supabase || !activeShopId) return undefined
 
     const timeout = window.setTimeout(async () => {
       setIsLoading(true)
       setDataError('')
 
       const { data, error } = await supabase
-        .from('completed_print_jobs')
+        .from('shop_completed_print_jobs')
         .select('*')
+        .eq('shop_id', activeShopId)
         .order('report_date', { ascending: false })
         .limit(1000)
 
@@ -296,14 +372,15 @@ export default function MonthlyReports() {
     }, 0)
 
     return () => window.clearTimeout(timeout)
-  }, [session])
+  }, [activeShopId, session])
 
   const monthlyReports = useMemo(() => {
     const currentMonthKey = monthKey(dateKey(new Date()))
     const reports = new Map()
 
     for (const day of completedDays) {
-      const key = monthKey(day.report_date)
+      const reportDate = reportDateKey(day.report_date)
+      const key = monthKey(reportDate)
       if (!key || key === currentMonthKey) continue
 
       const report = reports.get(key) || {
@@ -316,7 +393,7 @@ export default function MonthlyReports() {
         totalEarnings: 0,
       }
 
-      report.rowsByDate.set(day.report_date, day)
+      report.rowsByDate.set(reportDate, { ...day, report_date: reportDate })
       report.totalPrints += numberValue(day.total_prints)
       report.bwPrints += numberValue(day.black_and_white_prints)
       report.colorPrints += numberValue(day.color_prints)
@@ -392,6 +469,41 @@ export default function MonthlyReports() {
           />
           <h1 className="mt-5 text-2xl font-black">Monthly reports</h1>
           <p className="mt-2 text-sm text-slate-500">Sign in from the admin dashboard to view CSV files.</p>
+          <Link
+            href="/admin"
+            className="mt-5 inline-flex rounded-md bg-slate-950 px-4 py-3 text-sm font-black text-white shadow-sm hover:bg-slate-800"
+          >
+            Go to admin
+          </Link>
+        </div>
+      </main>
+    )
+  }
+
+  if (isLoadingShopAccess) {
+    return (
+      <main className="flex min-h-dvh items-center justify-center bg-slate-50 px-4 text-slate-950">
+        <div className="rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-sm">
+          <p className="text-sm font-semibold text-slate-600">Loading assigned shop...</p>
+        </div>
+      </main>
+    )
+  }
+
+  if (shopAccessError) {
+    return (
+      <main className="flex min-h-dvh items-center justify-center bg-slate-50 px-4 text-slate-950">
+        <div className="w-full max-w-md rounded-lg border border-red-200 bg-white p-6 text-center shadow-sm">
+          <Image
+            src="/logo/printq-logo.svg"
+            alt="PrintQ"
+            width={156}
+            height={40}
+            priority
+            className="mx-auto h-10 w-[156px] object-contain"
+          />
+          <h1 className="mt-5 text-2xl font-black">Shop access needed</h1>
+          <p className="mt-2 text-sm leading-6 text-slate-600">{shopAccessError}</p>
           <Link
             href="/admin"
             className="mt-5 inline-flex rounded-md bg-slate-950 px-4 py-3 text-sm font-black text-white shadow-sm hover:bg-slate-800"
